@@ -10,7 +10,8 @@ namespace deviceType{
         RELAY = 0x03, 
         ENCODER = 0X07, 
         POWER_DISTRIBUTION = 0X08, 
-        COLOR_SENSOR = 0X13
+        COLOR_SENSOR = 0X13,
+        SIL =  0X0E,
     };
 } //namespace deviceType
 
@@ -42,6 +43,7 @@ namespace Instructions{
         STOP_HUB = 0x00, 
         RESUME_MOTOR = 0x02, 
         RESUME_HUB = 0x01, 
+        SET_LED = 0X00,
 
     };
 } //namespace instructions
