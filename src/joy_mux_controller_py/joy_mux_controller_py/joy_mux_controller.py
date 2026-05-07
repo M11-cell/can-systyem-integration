@@ -124,7 +124,13 @@ class JoyMuxController(Node):
             if self.current_mode == 0:
                 twist = Twist()
                 twist.linear.x = msg.axes[Axes.LEFT_STICK_Y]
-                twist.angular.z = msg.axes[Axes.LEFT_STICK_X]
+
+                turn = 0.0
+                if msg.buttons[Buttons.SQUARE]:
+                    turn = 1.0
+                elif msg.buttons[Buttons.CIRCLE]:
+                    turn = -1.0
+                twist.angular.z = turn
 
                 self._cached_twist = twist
             else:

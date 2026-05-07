@@ -8,8 +8,8 @@
 #include "can-utils/system_controller.hpp"
 #include "can-utils/can_interface.hpp"
 #include <array>
-#include <memory>
 #include <chrono>
+#include <memory>
 #include <mutex>
 
 using namespace std::chrono;
@@ -49,10 +49,16 @@ class CanControllerNode : public rclcpp::Node{
         std::mutex cmd_mutex_;
         geometry_msgs::msg::Twist::ConstSharedPtr latest_twist_;
         sensor_msgs::msg::JointState::ConstSharedPtr latest_joint_state_;
-        bool twist_dirty_{false};
         bool joint_state_dirty_{false};
 
         float wheel_rpm_slew_rate_{0.F};
+        float wheel_rpm_abs_max_{0.F};
+        float wheel_slew_sign_change_boost_{1.F};
+        float cmd_vel_deadzone_{0.F};
+        float cmd_vel_angular_deadzone_{0.F};
+        double wheel_maintain_min_period_s_{0.0};
+
+        std::chrono::steady_clock::time_point last_wheel_maintain_{};
         std::array<float, 6> wheel_rpm_smoothed_{};
 }; 
 

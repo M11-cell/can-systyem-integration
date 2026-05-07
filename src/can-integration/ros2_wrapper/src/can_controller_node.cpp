@@ -17,6 +17,16 @@ CanControllerNode::CanControllerNode(const rclcpp::NodeOptions& options) :
         can_send_rate_hz_ = this->declare_parameter("can_send_rate_hz", 10);
         wheel_rpm_slew_rate_ = static_cast<float>(
             this->declare_parameter("wheel_rpm_slew_rate", 1500.0));
+        wheel_rpm_abs_max_ = static_cast<float>(
+            this->declare_parameter("wheel_rpm_abs_max", 1500.0));
+        wheel_slew_sign_change_boost_ = static_cast<float>(
+            this->declare_parameter("wheel_slew_sign_change_boost", 3.0));
+        cmd_vel_deadzone_ = static_cast<float>(
+            this->declare_parameter("cmd_vel_deadzone", 0.06));
+        cmd_vel_angular_deadzone_ = static_cast<float>(
+            this->declare_parameter("cmd_vel_angular_deadzone", 0.03));
+        wheel_maintain_min_period_s_ = this->declare_parameter(
+            "wheel_maintain_min_period_s", 0.0);
 
         can_interface_ = this->declare_parameter<std::string>("can_interface", "can0");
 
@@ -105,7 +115,6 @@ void CanControllerNode::getjoyfeedback(const sensor_msgs::msg::Joy::ConstSharedP
 void CanControllerNode::getTwistMessages(const geometry_msgs::msg::Twist::ConstSharedPtr& twist_msg){
     std::lock_guard<std::mutex> lock(cmd_mutex_);
     latest_twist_ = twist_msg;
-    twist_dirty_ = true;
 }
 
 void CanControllerNode::getJointStateMessages(const sensor_msgs::msg::JointState::ConstSharedPtr& joint_state_msg){
@@ -124,16 +133,11 @@ void CanControllerNode::sendCanFrames(){
 
     geometry_msgs::msg::Twist::ConstSharedPtr twist;
     sensor_msgs::msg::JointState::ConstSharedPtr joint_state;
-    bool send_twist = false;
     bool send_arm = false;
 
     {
         std::lock_guard<std::mutex> lock(cmd_mutex_);
-        if(twist_dirty_){
-            twist = latest_twist_;
-            twist_dirty_ = false;
-            send_twist = true;
-        }
+        twist = latest_twist_;
         if(joint_state_dirty_){
             joint_state = latest_joint_state_;
             joint_state_dirty_ = false;
@@ -141,39 +145,22 @@ void CanControllerNode::sendCanFrames(){
         }
     }
 
-    if(send_twist && inhibit_wheel_cmds){
-        constexpr float DEADZONE = 0.05f;
-        constexpr float kPureAxisEps = 1e-5f;
+    if(twist && inhibit_wheel_cmds){
+        const float lin_dz = cmd_vel_deadzone_;
+        const float ang_dz = cmd_vel_angular_deadzone_;
 
         auto linear_x = static_cast<float>(twist->linear.x);
         auto angular_z = static_cast<float>(twist->angular.z);
 
-        if(std::abs(linear_x) < DEADZONE) linear_x = 0.0f;
-        if(std::abs(angular_z) < DEADZONE) angular_z = 0.0f;
+        if(std::abs(linear_x) < lin_dz) linear_x = 0.0f;
+        if(std::abs(angular_z) < ang_dz) angular_z = 0.0f;
 
         const float half_track = 1.2f * 0.5f;
-        float right_cmd = 0.F;
-        float left_cmd = 0.F;
-
-        const bool yaw_only = std::abs(linear_x) < kPureAxisEps;
-        const bool translate_only = std::abs(angular_z) < kPureAxisEps;
-
-        if(translate_only && yaw_only){
-            right_cmd = 0.F;
-            left_cmd = 0.F;
-        }else if(translate_only){
-            right_cmd = -linear_x;
-            left_cmd = -linear_x;
-        }else if(yaw_only){
-            right_cmd = -(-angular_z * half_track);
-            left_cmd = -((-angular_z * half_track));
-        }else{
-            right_cmd = -(linear_x - (-angular_z * half_track));
-            left_cmd = -(linear_x + (-angular_z * half_track));
-        }
+        float right_cmd = -(linear_x - (-angular_z * half_track));
+        float left_cmd = -(linear_x + (-angular_z * half_track));
 
         const float mult = static_cast<float>(multiplier);
-        const std::array<float, 6> target_rpm = {
+        std::array<float, 6> target_rpm = {
             right_cmd * mult,
             right_cmd * mult,
             right_cmd * mult,
@@ -182,8 +169,14 @@ void CanControllerNode::sendCanFrames(){
             left_cmd * mult,
         };
 
+        if(wheel_rpm_abs_max_ > 0.F){
+            for(float& t : target_rpm){
+                t = std::clamp(t, -wheel_rpm_abs_max_, wheel_rpm_abs_max_);
+            }
+        }
+
         const float dt = 1.F / static_cast<float>(std::max(1, can_send_rate_hz_));
-        const float max_step = (wheel_rpm_slew_rate_ > 0.F)
+        const float base_max_step = (wheel_rpm_slew_rate_ > 0.F)
             ? wheel_rpm_slew_rate_ * dt
             : std::numeric_limits<float>::max();
 
@@ -197,19 +190,36 @@ void CanControllerNode::sendCanFrames(){
         };
 
         for(size_t i = 0; i < kWheelIds.size(); ++i){
-            float delta = target_rpm[i] - wheel_rpm_smoothed_[i];
+            const float target = target_rpm[i];
+            float current = wheel_rpm_smoothed_[i];
+            float max_step = base_max_step;
+            if(wheel_slew_sign_change_boost_ > 1.F
+                && target * current < 0.F
+                && std::abs(current) > 1e-3F){
+                max_step *= wheel_slew_sign_change_boost_;
+            }
+            float delta = target - current;
             if(delta > max_step) delta = max_step;
             if(delta < -max_step) delta = -max_step;
-            wheel_rpm_smoothed_[i] += delta;
+            wheel_rpm_smoothed_[i] = current + delta;
             frame_builder_->sendWheelMotorVelocity(kWheelIds[i], wheel_rpm_smoothed_[i]);
         }
 
-        frame_builder_->startMotors(0x7E);
+        const auto steady_now = std::chrono::steady_clock::now();
+        const bool time_for_maintain =
+            (wheel_maintain_min_period_s_ <= 0.0)
+            || (std::chrono::duration<double>(steady_now - last_wheel_maintain_).count()
+                >= wheel_maintain_min_period_s_);
+        if(time_for_maintain){
+            frame_builder_->startMotors(0x7E);
+            last_wheel_maintain_ = steady_now;
+        }
 
-        logger.info("Wheel Motor Commands Sent: Right RPM = {:.2f}, Left RPM = {:.2f} (targets {:.2f}/{:.2f})",
-                wheel_rpm_smoothed_[0], wheel_rpm_smoothed_[3],
-                target_rpm[0], target_rpm[3]);
-        RCLCPP_INFO(
+        RCLCPP_DEBUG(
+            this->get_logger(),
+            "Wheel RPM smoothed R/L targets: %.1f/%.1f cmd %.3f/%.3f",
+            wheel_rpm_smoothed_[0], wheel_rpm_smoothed_[3], right_cmd, left_cmd);
+        RCLCPP_DEBUG(
             this->get_logger(),
             "candump wheel velocity frame IDs (29-bit hex): "
             "W1=%08X W2=%08X W3=%08X W4=%08X W5=%08X W6=%08X",
@@ -266,16 +276,6 @@ void CanControllerNode::sendCanFrames(){
         }
         RCLCPP_INFO(this->get_logger(), "Arm motor commands sent: Motor 1 = %.2f, Motor 2 = %.2f, Motor 3 = %.2f, Motor 4 = %.2f, Motor 5 = %.2f",
             cmd_sent[0], cmd_sent[1], cmd_sent[2], cmd_sent[3], cmd_sent[4]);
-        RCLCPP_INFO(
-            this->get_logger(),
-            "candump arm velocity frame IDs (29-bit hex, matches socketcan EFF id): "
-            "m3=%08X",
-            buildAddress::BuildAddress::buildCANID(
-                static_cast<uint32_t>(deviceType::DeviceType::ARM_MOTOR_CONTROLLER),
-                Manufacturer::ARM_MOTOR_CONTROLLER, severity::SEV_STATUS,
-                static_cast<uint32_t>(MOTOR_MAP[2]),
-                static_cast<uint32_t>(DeviceId::ID::ARM_MOTOR_CONTROLLER))
-            );
     }
 }
 
