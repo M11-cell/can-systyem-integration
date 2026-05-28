@@ -179,7 +179,7 @@ void CanControllerNode::sendCanFrames(){
         if(std::abs(linear_x) < DEADZONE) linear_x = 0.0f;
         if(std::abs(angular_z) < DEADZONE) angular_z = 0.0f;
 
-        const float half_track = 1.2f * 0.5f;
+        const float half_track = 0.591f * 0.5f;  // measured track width 591 mm / 2; must match _ROVER_HALF_TRACK_M in joy_mux_controller.py
         float  right_cmd = 0.F;
         float left_cmd = 0.F;
 

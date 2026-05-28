@@ -11,6 +11,13 @@ _JOY_MIN_BUTTONS = 29
 _JOY_MIN_AXES = 8
 _ARM_JOINT_COUNT = 7
 
+# Rover drive geometry — must match half_track in can_controller_node.cpp.
+# Track width = 591 mm (left–right wheel centers); half_track = 591 mm / 2.
+_ROVER_HALF_TRACK_M: float = 0.591 / 2.0  # 0.2955 m
+
+# Minimum STICK_Z deflection before tank-mode uses the stick value instead of ±1.
+_ROVER_TANK_Z_DEADZONE: float = 0.05
+
 
 class ArmVelocityScale:
     """Max velocity scale per arm motor (normalized stick/button input in [-1, 1])."""
@@ -119,6 +126,55 @@ class JoyMuxController(Node):
             return self._rover_boost_trigger_up
         return 1.0
 
+    def _build_rover_twist(self, msg: Joy) -> Twist:
+        """Build a Twist for rover mode.
+
+        Priority (highest first):
+          1. A3 left/right — pivot: one track stopped, other driven by STICK_Y.
+          2. A4 left/right — tank:  linear.x = 0, yaw from STICK_Z (or ±1 if
+                                    near-zero stick).
+          3. default        — arc:  both sticks pass through; can_controller
+                                    mixes them into left/right RPM.
+
+        Boost triggers are applied to the final (vx, wz) pair.
+        """
+        stick_y = float(msg.axes[VKBAxesLayout.STICK_Y])
+        stick_z = float(msg.axes[VKBAxesLayout.STICK_Z])
+
+        pivot_left  = bool(msg.buttons[VKBButtonLayout.A3_LEFT])
+        pivot_right = bool(msg.buttons[VKBButtonLayout.A3_RIGHT])
+        tank_left   = bool(msg.buttons[VKBButtonLayout.A4_LEFT])
+        tank_right  = bool(msg.buttons[VKBButtonLayout.A4_RIGHT])
+
+        if pivot_left:
+            # Pivot about the right track: right side stops, left side driven.
+            # vx/wz chosen so can_controller's skid-steer mix zeroes right_cmd.
+            vx = -stick_y / 2.0
+            wz =  stick_y / (2.0 * _ROVER_HALF_TRACK_M)
+        elif pivot_right:
+            # Pivot about the left track: left side stops, right side driven.
+            vx =  stick_y / 2.0
+            wz = -stick_y / (2.0 * _ROVER_HALF_TRACK_M)
+        elif tank_left:
+            # Tank spin left: modulate with STICK_Z if deflected, else full speed.
+            vx = 0.0
+            wz = stick_z if abs(stick_z) > _ROVER_TANK_Z_DEADZONE else 1.0
+        elif tank_right:
+            # Tank spin right: modulate with STICK_Z if deflected, else full speed.
+            vx = 0.0
+            wz = stick_z if abs(stick_z) > _ROVER_TANK_Z_DEADZONE else -1.0
+        else:
+            # Default arc drive: pass both axes through; can_controller mixes
+            # them into different left/right speeds for curved motion.
+            vx = stick_y
+            wz = stick_z
+
+        boost = self._rover_boost(msg.buttons)
+        twist = Twist()
+        twist.linear.x = vx * boost
+        twist.angular.z = wz * boost
+        return twist
+
     def joy_callback(self, msg: Joy):
         if len(msg.buttons) < _JOY_MIN_BUTTONS or len(msg.axes) < _JOY_MIN_AXES:
             self.get_logger().warning(
@@ -153,17 +209,7 @@ class JoyMuxController(Node):
 
         if self._deadman_held:
             if self.current_mode == 0:
-                twist = Twist()
-                twist.linear.x = msg.axes[VKBAxesLayout.STICK_Y]
-                twist.angular.z = msg.axes[VKBAxesLayout.STICK_Z]
-                tank_turn = (1 if msg.buttons[VKBButtonLayout.A4_LEFT] else 0) - (1 if msg.buttons[VKBButtonLayout.A4_RIGHT] else 0)
-                if tank_turn != 0:
-                    twist.linear.x = 0.0
-                    twist.angular.z = float(tank_turn)
-                boost = self._rover_boost(msg.buttons)
-                twist.linear.x *= boost
-                twist.angular.z *= boost
-                self._cached_twist = twist
+                self._cached_twist = self._build_rover_twist(msg)
             else:
                 joint_state = JointState()
                 joint_state.name = [f'joint{i+1}' for i in range(_ARM_JOINT_COUNT)]
