@@ -38,7 +38,7 @@ CanControllerNode::CanControllerNode(const rclcpp::NodeOptions& options) :
         spin_max_deg_per_command_ = static_cast<float>(
             this->declare_parameter("spin_max_deg_per_command", 7.0));
         clamp_max_deg_per_command_ = static_cast<float>(
-            this->declare_parameter("clamp_max_deg_per_command", 15.0));
+            this->declare_parameter("clamp_max_deg_per_command", 10.0));
 
         can_controller_ = can_util::createConfiguredCanController(can_interface_, this->get_logger());
         if (!can_controller_) {
@@ -320,17 +320,13 @@ void CanControllerNode::sendCanFrames(){
 
             const int32_t spin_deg = static_cast<int32_t>(
                 std::round(std::clamp(spin_in, -1.0f, 1.0f) * spin_max_deg_per_command_));
-            if (spin_deg != 0) {
-                frame_builder_->sendSpinServoPosition(spin_deg);
-                std::this_thread::sleep_for(std::chrono::microseconds(400));
-            }
+            frame_builder_->sendSpinServoPosition(spin_deg);
+            std::this_thread::sleep_for(std::chrono::microseconds(400));
 
             const int32_t clamp_deg = static_cast<int32_t>(
                 std::round(std::clamp(clamp_in, -1.0f, 1.0f) * clamp_max_deg_per_command_));
-            if (clamp_deg != 0) {
-                frame_builder_->sendClampServoPosition(clamp_deg);
-                std::this_thread::sleep_for(std::chrono::microseconds(400));
-            }
+            frame_builder_->sendClampServoPosition(clamp_deg);
+            std::this_thread::sleep_for(std::chrono::microseconds(400));
 
             if (arm_active && (spin_deg != 0 || clamp_deg != 0)) {
                 RCLCPP_INFO_THROTTLE(

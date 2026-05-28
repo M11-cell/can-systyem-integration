@@ -99,6 +99,14 @@ class JoyMuxController(Node):
         self._rover_boost_trigger_down = self.declare_parameter(
             "rover_boost_trigger_down", 2.0
         ).value
+        self._rover_boost_slew_up_per_s = self.declare_parameter(
+            "rover_boost_slew_up_per_s", 10.0
+        ).value
+        self._rover_boost_slew_down_per_s = self.declare_parameter(
+            "rover_boost_slew_down_per_s", 2.0
+        ).value
+        self._current_rover_boost = 1.0
+        self._last_boost_update_at_s: float | None = None
 
         self.get_logger().info(
             f"joy_mux_controller ready — max_cmd_publish_hz={max_cmd_publish_hz}, "
@@ -107,7 +115,9 @@ class JoyMuxController(Node):
             f"mode_toggle_cooldown_s={self._mode_toggle_cooldown_s}, "
             f"arm_button_min_hold_s={self._arm_button_min_hold_s}, "
             f"rover_boost_trigger_up={self._rover_boost_trigger_up}, "
-            f"rover_boost_trigger_down={self._rover_boost_trigger_down}"
+            f"rover_boost_trigger_down={self._rover_boost_trigger_down}, "
+            f"rover_boost_slew_up_per_s={self._rover_boost_slew_up_per_s}, "
+            f"rover_boost_slew_down_per_s={self._rover_boost_slew_down_per_s}"
         )
 
     def _publish_all_stop(self) -> None:
@@ -119,14 +129,39 @@ class JoyMuxController(Node):
         stopped.effort = []
         self.arm_pub.publish(stopped)
 
-    def _rover_boost(self, buttons) -> float:
+    def _target_rover_boost(self, buttons) -> float:
         if buttons[VKBButtonLayout.TRIGGER_DOWN]:
             return self._rover_boost_trigger_down
         if buttons[VKBButtonLayout.TRIGGER_UP]:
             return self._rover_boost_trigger_up
         return 1.0
 
-    def _build_rover_twist(self, msg: Joy) -> Twist:
+    def _update_rover_boost(self, now_s: float, buttons) -> float:
+        target = self._target_rover_boost(buttons)
+        if self._last_boost_update_at_s is None:
+            self._last_boost_update_at_s = now_s
+            self._current_rover_boost = target
+            return self._current_rover_boost
+
+        dt = max(0.0, now_s - self._last_boost_update_at_s)
+        self._last_boost_update_at_s = now_s
+
+        slew_per_s = (
+            self._rover_boost_slew_up_per_s
+            if target >= self._current_rover_boost
+            else self._rover_boost_slew_down_per_s
+        )
+        max_step = max(0.0, slew_per_s) * dt
+        delta = target - self._current_rover_boost
+
+        if delta > max_step:
+            delta = max_step
+        elif delta < -max_step:
+            delta = -max_step
+        self._current_rover_boost += delta
+        return self._current_rover_boost
+
+    def _build_rover_twist(self, msg: Joy, now_s: float) -> Twist:
         """Build a Twist for rover mode.
 
         Priority (highest first):
@@ -169,7 +204,7 @@ class JoyMuxController(Node):
             vx = stick_y
             wz = stick_z
 
-        boost = self._rover_boost(msg.buttons)
+        boost = self._update_rover_boost(now_s, msg.buttons)
         twist = Twist()
         twist.linear.x = vx * boost
         twist.angular.z = wz * boost
@@ -209,7 +244,7 @@ class JoyMuxController(Node):
 
         if self._deadman_held:
             if self.current_mode == 0:
-                self._cached_twist = self._build_rover_twist(msg)
+                self._cached_twist = self._build_rover_twist(msg, now_s)
             else:
                 joint_state = JointState()
                 joint_state.name = [f'joint{i+1}' for i in range(_ARM_JOINT_COUNT)]
@@ -245,6 +280,8 @@ class JoyMuxController(Node):
                 self.get_clock().now().nanoseconds * 1e-9
                 + self._stop_burst_duration_s
             )
+            self._current_rover_boost = 1.0
+            self._last_boost_update_at_s = None
             self._publish_all_stop()
 
         self._prev_deadman = self._deadman_held
