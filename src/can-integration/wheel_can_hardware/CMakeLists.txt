@@ -62,6 +62,12 @@ target_include_directories(wheel_odometry_node
 )
 ament_target_dependencies(wheel_odometry_node ${ODOM_DEPENDENCIES})
 
+# Bench node: send wheel commands and print telemetry on one CAN socket.
+add_executable(wheel_bench_node
+  src/wheel_bench_node.cpp
+)
+ament_target_dependencies(wheel_bench_node rclcpp geometry_msgs can-utils ros2_fmt_logger)
+
 install(
   TARGETS wheel_can_interface
   EXPORT export_${PROJECT_NAME}
@@ -72,7 +78,7 @@ install(
 )
 
 install(
-  TARGETS wheel_odometry_node
+  TARGETS wheel_odometry_node wheel_bench_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
