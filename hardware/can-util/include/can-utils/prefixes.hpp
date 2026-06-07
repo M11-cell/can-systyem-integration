@@ -63,7 +63,7 @@ namespace Instructions{
         TURN_ON_FAN = 0X0A,
 
 
-        // BAB telemetry instruction bytes -- see src/can-integration/docs/BAB-docs.md.
+        // BAB telemetry instruction bytes -- see docs/BAB-docs.md.
         BATTERY_TELEM = 0x00,
         RAIL_TELEM = 0x02,
         TCU_TELEM = 0x03,

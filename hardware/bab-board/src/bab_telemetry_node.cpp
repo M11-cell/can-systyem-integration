@@ -8,7 +8,7 @@
 //       -p log_unknown_bab_frames:=true
 //
 // Parameters:
-//   can_interface           (string, default "can0") SocketCAN device.
+//   can_interface           (string, default "can0") SocketCAN interface.
 //   print_period_ms         (int,    default 1000)   Telemetry print period.
 //   log_unknown_bab_frames  (bool,   default false)  If true, every received
 //                                                    frame whose DeviceType
@@ -21,10 +21,11 @@
 //                                                    on the bus.
 
 #include <chrono>
-#include <iomanip>
 #include <memory>
-#include <sstream>
 #include <string>
+#include <string_view>
+
+#include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <rclcpp/rclcpp.hpp>
 #include <ros2_fmt_logger/ros2_fmt_logger.hpp>
@@ -39,31 +40,31 @@ static constexpr auto BAB_MANUFACTURER = can_util::constants::Manufacturer::TEAM
 static constexpr auto BAB_ID = 0x00;
 
 namespace {
-    // TODO 2026-05-26 (Will Free): convert this to using fmt with ros2_fmt_logger
     std::string formatRow(
-        const char* label,
+        std::string_view label,
         const bool fresh,
         const bool ever_received,
-        const float v, const float i, const float p_or_t,
-        const char* p_or_t_label,
-        const char* extra = nullptr
-    ) {
-        std::ostringstream ss;
-        ss << "  " << std::left << std::setw(10) << label
-            << " V=" << std::setw(7) << std::fixed << std::setprecision(2) << v
-            << " I=" << std::setw(7) << std::fixed << std::setprecision(2) << i
-            << " " << p_or_t_label << "=" << std::setw(7) << std::fixed << std::setprecision(2) << p_or_t;
-        if (extra) {
-            ss << " " << extra;
+        const float v,
+        const float i,
+        std::string_view p_or_t_label,
+        const float p_or_t,
+        std::string_view extra = {}) {
+        const std::string_view status =
+            !ever_received ? "  [NO FRAMES YET]" :
+            !fresh ? "  [STALE]" :
+            "  [ok]";
+        if (extra.empty()) {
+            return fmt::format(
+                "  {:<14} V={:7.2f} I={:7.2f} {}={:7.2f}{}",
+                label, v, i, p_or_t_label, p_or_t, status);
         }
-        if (!ever_received) {
-            ss << "  [NO FRAMES YET]";
-        } else if (!fresh) {
-            ss << "  [STALE]";
-        } else {
-            ss << "  [ok]";
-        }
-        return ss.str();
+        return fmt::format(
+            "  {:<14} V={:7.2f} I={:7.2f} {}={:7.2f} {} {}",
+            label, v, i, p_or_t_label, p_or_t, extra, status);
+    }
+
+    const char* railLabel(const size_t idx) {
+        return idx < BAB::RAILS_COUNT ? BAB::RAIL_SUBSYSTEM_NAMES[idx] : "Unknown";
     }
 }
 
@@ -91,7 +92,7 @@ public:
 
         if (log_unknown) {
             // Independent callback so we can warn about BAB-typed frames whose
-            // Manufacturer / DeviceID do not match BAB-docs.md (i.e. frames
+            // Manufacturer / DeviceID do not match docs/BAB-docs.md (i.e. frames
             // that the BAB parser will silently ignore).
             unknown_frame_callback = can_controller->registerFrameCallback(
                 [this](const uint32_t id, const std::vector<uint8_t>& data) {
@@ -116,45 +117,42 @@ public:
 
 private:
     void printTelemetry() const {
-        std::ostringstream ss;
-        ss << "\n--- BAB Telemetry (iface=" << can_interface << ") ---";
+        std::string report = fmt::format("\n--- BAB Telemetry (iface={}) ---", can_interface);
 
         for (size_t i = 0; i < BAB::BATTERIES_COUNT; ++i) {
-            std::string label = "Battery " + std::to_string(i + 1);
-            ss << "\n"
-                << formatRow(label.c_str(),
-                             bab->batteryFresh(i),
-                             bab->batteryEverReceived(i),
-                             bab->getBatteryVoltageLevel(i),
-                             bab->getBatteryCurrentLevel(i),
-                             bab->getBatteryTemp(i),
-                             "T");
+            fmt::format_to(
+                std::back_inserter(report),
+                "\n{}",
+                formatRow(
+                    fmt::format("Battery {}", i + 1),
+                    bab->batteryFresh(i),
+                    bab->batteryEverReceived(i),
+                    bab->getBatteryVoltageLevel(i),
+                    bab->getBatteryCurrentLevel(i),
+                    "T",
+                    bab->getBatteryTemp(i)));
         }
 
-        // TODO 2026-05-26 (Will Free): convert this to using fmt
         for (size_t i = 0; i < BAB::RAILS_COUNT; ++i) {
-            // TODO 2026-05-26 (Will Free): this ternary sucks
-            const char* name = i == 0
-                                   ? "Rail 1 (5V)"
-                                   : i == 1
-                                   ? "Rail 2 (Arm)"
-                                   : "Rail 3 (Whl)";
-            std::ostringstream extra;
-            extra << "P=" << std::fixed << std::setprecision(1)
-                << bab->getRailPower(i) << "W"
-                << " sw=" << (bab->getRailSwitchOn(i) ? "ON " : "OFF");
-            ss << "\n"
-                << formatRow(name,
-                             bab->railFresh(i),
-                             bab->railEverReceived(i),
-                             bab->getRailVoltageLevel(i),
-                             bab->getRailCurrent(i),
-                             bab->getRailPower(i),
-                             "P",
-                             extra.str().c_str());
+            const std::string extra = fmt::format(
+                "P={:.1f}W sw={}",
+                bab->getRailPower(i),
+                bab->getRailSwitchOn(i) ? "ON" : "OFF");
+            fmt::format_to(
+                std::back_inserter(report),
+                "\n{}",
+                formatRow(
+                    fmt::format("Rail {} ({})", i + 1, railLabel(i)),
+                    bab->railFresh(i),
+                    bab->railEverReceived(i),
+                    bab->getRailVoltageLevel(i),
+                    bab->getRailCurrent(i),
+                    "P",
+                    bab->getRailPower(i),
+                    extra));
         }
 
-        logger.info("{}", ss.str());
+        logger.info("{}", report);
     }
 
     void onAnyFrame(const uint32_t id, const std::vector<uint8_t>& data) const {
@@ -175,7 +173,6 @@ private:
     std::string can_interface;
     bool log_unknown = false;
     std::shared_ptr<can_util::CANController> can_controller;
-    // std::unique_ptr<buildAddress::BuildAddress> build_address_;
     std::shared_ptr<BAB> bab;
     std::shared_ptr<can_util::CANFrameCallback> unknown_frame_callback;
     rclcpp::TimerBase::SharedPtr timer;
