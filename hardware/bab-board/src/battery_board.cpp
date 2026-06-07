@@ -14,16 +14,18 @@ static constexpr auto RELAY_STATUS = 0x08;
 static constexpr auto TCU_STATUS = 0x0A;
 
 // CAN-ID fields used by BAB firmware for both telemetry TX and command RX
-// (see src/can-integration/docs/BAB-docs copy.md / Firmware/BAB_MX).
+// (see docs/BAB-docs.md / Firmware/BAB_MX).
 static constexpr uint8_t BAB_FIRMWARE_DEVTYPE = 0x00;
 static constexpr uint8_t BAB_FIRMWARE_MFR = static_cast<uint8_t>(can_util::constants::Manufacturer::TEAM_USE); // 0x08 (CAN_MFR_SCC)
 static constexpr uint8_t BAB_FIRMWARE_DEVICE_ID = 0x00;
 
-// Firmware DATA_SELECT_1 / DATA_SELECT_2 (command payload words, not telemetry indices).
-// 0x000F → PDS rail 1 (arm / CH2). 0x00F0 → PDS rail 2 (wheel / CH3).
-// CH1 (5 V) is telemetry index 0 only; firmware has no CAN command for it.
-static constexpr uint16_t DATA_SELECT_ARM_RAIL = 0x000F;
-static constexpr uint16_t DATA_SELECT_WHEEL_RAIL = 0x00F0;
+// Firmware doc defaults: idx0=5V, idx1=Arm (0x000F / CH2), idx2=Wheel (0x00F0 / CH3).
+// Deployed rover rotation (arm→5V, 5V→wheel, wheel→arm):
+//   idx0 = Wheel (CH1) — telemetry only, no CAN rail-select command
+//   idx1 = 5V    (CH2) — 0x000F
+//   idx2 = Arm   (CH3) — 0x00F0
+static constexpr uint16_t DATA_SELECT_5V_RAIL = 0x000F;
+static constexpr uint16_t DATA_SELECT_ARM_RAIL = 0x00F0;
 
 // BAB command TX is off until bench-validated on hardware.
 static constexpr bool BAB_COMMAND_TX_ENABLED = false;
@@ -83,9 +85,9 @@ void BAB::handleFrames(const uint32_t id, const std::vector<uint8_t>& data) {
         const uint8_t reason = data[0] & 0x03;
         // TODO 2026-05-26 (Will Free): this ternary sucks
         const char* reason_str = reason == 0x01
-                                     ? "arm rail"
+                                     ? "5V rail"
                                      : reason == 0x02
-                                     ? "wheel rail"
+                                     ? "arm rail"
                                      : "all rails";
         logger.warn("BAB automatic PDS rail shutdown (reason={:#02X}, {})", reason, reason_str);
         return;
@@ -319,17 +321,22 @@ bool BAB::cutFanPower(uint8_t /*fanID*/) {
 }
 
 bool BAB::CutRelayCommand(uint8_t relayID) {
-    const uint16_t select = relayID == static_cast<uint8_t>(DeviceId::ID::JMSB)
-                                ? DATA_SELECT_ARM_RAIL
-                                : DATA_SELECT_WHEEL_RAIL;
-    return sendBabControlFrame(static_cast<uint8_t>(Instructions::Inst::TURN_OFF_RELAY), select);
+    if (relayID != static_cast<uint8_t>(DeviceId::ID::JMSB)) {
+        logger.warn("BAB wheel relay cut not supported — wheel is CH1 (telemetry only, no DATA_SELECT)");
+        return false;
+    }
+    return sendBabControlFrame(static_cast<uint8_t>(Instructions::Inst::TURN_OFF_RELAY), DATA_SELECT_ARM_RAIL);
 }
 
 bool BAB::sendManualPowerCommands(uint8_t selectRailID, bool turnOn) {
     const auto inst = turnOn ? Instructions::Inst::COMMAND_ON : Instructions::Inst::COMMAND_OFF;
-    const uint16_t select =
-        selectRailID == static_cast<uint8_t>(DeviceId::ID::ARM_EMERGENCY_INTERVENTION)
-            ? DATA_SELECT_ARM_RAIL
-            : DATA_SELECT_WHEEL_RAIL;
-    return sendBabControlFrame(static_cast<uint8_t>(inst), select);
+    if (selectRailID == static_cast<uint8_t>(DeviceId::ID::ARM_EMERGENCY_INTERVENTION)) {
+        return sendBabControlFrame(static_cast<uint8_t>(inst), DATA_SELECT_ARM_RAIL);
+    }
+    if (selectRailID == static_cast<uint8_t>(DeviceId::ID::WHEEL_EMERGENCY_INTERVENTION)) {
+        logger.warn("BAB wheel rail command not supported — wheel is CH1 (telemetry only, no DATA_SELECT)");
+        return false;
+    }
+    logger.warn("BAB manual power command: unknown selectRailID={:#04X}", selectRailID);
+    return false;
 }

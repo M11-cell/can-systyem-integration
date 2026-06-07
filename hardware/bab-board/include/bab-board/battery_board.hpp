@@ -49,7 +49,7 @@ struct RelayTelemetry {
  * @brief Battery Arbiter Board telemetry decoder.
  *
  * Decodes CAN frames published by the BAB firmware (per
- * src/can-integration/docs/BAB-docs.md) and stores the latest values
+ * docs/BAB-docs.md) and stores the latest values
  * per-battery (2 batteries) and per-rail (3 PDS rails) so callers can
  * query individual channels.
  *
@@ -62,6 +62,12 @@ public:
     static constexpr auto BATTERIES_COUNT = 2;
     static constexpr auto RAILS_COUNT = 3;
     static constexpr auto RELAYS_COUNT = 2;
+
+    /// Subsystem label per firmware rail index on the deployed rover.
+    /// Firmware docs default to idx0=5V, idx1=Arm, idx2=Wheel;
+    static constexpr std::array<const char*, RAILS_COUNT> RAIL_SUBSYSTEM_NAMES = {{
+        "Wheel", "5V", "Arm",
+    }};
 
     BAB(rclcpp::Logger logger, can_util::CANController::SharedPtr& can_controller, uint32_t device_id);
 
