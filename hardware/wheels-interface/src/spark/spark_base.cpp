@@ -159,7 +159,10 @@ namespace wheels_interface {
         );
 
         data[4] = parameterType; // Add parameter type to CAN data
-        sendCanFrame(arbId, data); // Send CAN frame with parameter data
+        if (!sendCanFrame(arbId, data)) {
+            logger.error("Error sending CAN message for parameter '{}'", parameterName);
+            return;
+        }
     }
 
     std::optional<std::variant<float, uint32_t, bool>> SparkBase::readParameter(const Parameter parameterId) const {

@@ -1,23 +1,31 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <linux/can.h>
+#include <mutex>
 #include <rclcpp/logger.hpp>
 #include <rclcpp/macros.hpp>
 #include <ros2_fmt_logger/logger.hpp>
+#include <thread>
+#include <vector>
 
 namespace can_util {
     using CANFrameCallback = std::function<void(uint32_t id, const std::vector<uint8_t>& data)>;
 
     class CANController : public std::enable_shared_from_this<CANController> {
     public:
-        RCLCPP_SMART_PTR_DEFINITIONS(CANController);
+        RCLCPP_SMART_PTR_DEFINITIONS(CANController)
 
         CANController(std::string path, rclcpp::Logger logger);
 
         ~CANController();
 
         bool initialize();
+
+        bool configureCan() { return initialize(); }
+
+        void stop();
 
         std::shared_ptr<CANFrameCallback> registerFrameCallback(CANFrameCallback callback);
 
@@ -52,12 +60,18 @@ namespace can_util {
             return trySendBlockingFrame(frame);
         }
 
+        bool sendBlockingFrame(const can_frame& frame) const {
+            return trySendBlockingFrame(frame);
+        }
+
         // TODO 2026-02-25 (Will Free): add a way to read can frames with a specific id, ignoring all others?
         bool readFrameIfAvailable(can_frame& frame) const;
 
         bool readFrame(can_frame& frame) const;
 
     private:
+        void shutdown();
+
         bool trySendBlockingFrame(const can_frame& frame) const;
 
         bool sendFrame(const can_frame& frame) const;
@@ -65,7 +79,8 @@ namespace can_util {
         mutable std::mutex mtx;
         ros2_fmt_logger::Logger logger;
         std::string path;
-        int socket_descriptor = 0;
+        int socket_descriptor = -1;
+        std::atomic_bool stop_{false};
         std::thread readThread;
         std::vector<std::weak_ptr<CANFrameCallback>> frame_callbacks = {};
 

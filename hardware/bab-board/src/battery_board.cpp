@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "can-utils/prefixes.hpp"
 #include "can_util/can_id_util.hpp"
 
 static constexpr auto AUTOMATIC_RAIL_SHUTDOWN = 0x02;
@@ -15,7 +16,7 @@ static constexpr auto TCU_STATUS = 0x0A;
 // CAN-ID fields used by BAB firmware for both telemetry TX and command RX
 // (see src/can-integration/docs/BAB-docs copy.md / Firmware/BAB_MX).
 static constexpr uint8_t BAB_FIRMWARE_DEVTYPE = 0x00;
-static constexpr uint8_t BAB_FIRMWARE_MFR = can_util::constants::Manufacturer::TEAM_USE; // 0x08 (CAN_MFR_SCC)
+static constexpr uint8_t BAB_FIRMWARE_MFR = static_cast<uint8_t>(can_util::constants::Manufacturer::TEAM_USE); // 0x08 (CAN_MFR_SCC)
 static constexpr uint8_t BAB_FIRMWARE_DEVICE_ID = 0x00;
 
 // Firmware DATA_SELECT_1 / DATA_SELECT_2 (command payload words, not telemetry indices).
@@ -310,24 +311,25 @@ bool BAB::getRelayClosed(const size_t idx) const {
 // ------------------------------ Commands ---------------------------------
 
 bool BAB::sendKYSCommand() {
-    return sendBabEmergencyFrame(CUT_PDS_OUTPUTS);
+    return sendBabEmergencyFrame(static_cast<uint8_t>(Instructions::Inst::CUT_PDS_OUTPUTS));
 }
 
 bool BAB::cutFanPower(uint8_t /*fanID*/) {
-    return sendBabControlFrame(TURN_OFF_FAN, 0x0000);
+    return sendBabControlFrame(static_cast<uint8_t>(Instructions::Inst::TURN_OFF_FAN), 0x0000);
 }
 
 bool BAB::CutRelayCommand(uint8_t relayID) {
-    const uint16_t select = relayID == DeviceId::ID::JMSB ? DATA_SELECT_ARM_RAIL : DATA_SELECT_WHEEL_RAIL;
-    return sendBabControlFrame(TURN_OFF_RELAY, select);
+    const uint16_t select = relayID == static_cast<uint8_t>(DeviceId::ID::JMSB)
+                                ? DATA_SELECT_ARM_RAIL
+                                : DATA_SELECT_WHEEL_RAIL;
+    return sendBabControlFrame(static_cast<uint8_t>(Instructions::Inst::TURN_OFF_RELAY), select);
 }
 
 bool BAB::sendManualPowerCommands(uint8_t selectRailID, bool turnOn) {
-    const Instructions::Inst inst =
-        turnOn ? COMMAND_ON : COMMAND_OFF;
+    const auto inst = turnOn ? Instructions::Inst::COMMAND_ON : Instructions::Inst::COMMAND_OFF;
     const uint16_t select =
-        selectRailID == DeviceId::ID::ARM_EMERGENCY_INTERVENTION
+        selectRailID == static_cast<uint8_t>(DeviceId::ID::ARM_EMERGENCY_INTERVENTION)
             ? DATA_SELECT_ARM_RAIL
             : DATA_SELECT_WHEEL_RAIL;
-    return sendBabControlFrame(inst, select);
+    return sendBabControlFrame(static_cast<uint8_t>(inst), select);
 }

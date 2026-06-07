@@ -18,11 +18,6 @@
 
 using namespace std::chrono;
 using namespace std::literals::chrono_literals;
-//#define MAX_MOTOR_SPEED 1024.f
-
-namespace buildAddress {
-    class BuildAddress;
-}
 
 class CanControllerNode : public rclcpp::Node {
 public:
@@ -80,7 +75,6 @@ private:
 
     std::unique_ptr<spark_max::SparkMaxFeedback> wheel_feedback_;
 
-    std::unique_ptr<buildAddress::BuildAddress> bab_build_address_;
     std::shared_ptr<BAB> bab_;
     std::unique_ptr<ProduceDiagnostics> bab_diagnostics_;
 };
