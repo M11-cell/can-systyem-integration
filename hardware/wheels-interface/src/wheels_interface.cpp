@@ -278,8 +278,9 @@ namespace wheels_interface {
         const auto rate = rclcpp::WallRate::make_shared(HEARTBEAT_PERIOD);
         rate->reset();
 
-        if (wheels.size() < 0)
+        if (wheels.empty()) {
             return;
+        }
 
         // AFAIK you can send the same heartbeat command for all the motors?
         // might need to double check that...

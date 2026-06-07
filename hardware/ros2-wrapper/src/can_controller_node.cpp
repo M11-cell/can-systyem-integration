@@ -67,11 +67,9 @@ CanControllerNode::CanControllerNode(const rclcpp::NodeOptions& options) :
 
     frame_builder_ = std::make_unique<SystemFrameBuilder>(can_controller_);
 
-    bab_build_address_ = std::make_unique<buildAddress::BuildAddress>(can_controller_);
     bab_ = std::make_shared<BAB>(
         this->get_logger(),
-        *can_controller_,
-        *bab_build_address_,
+        can_controller_,
         static_cast<uint32_t>(DeviceId::ID::BAB));
     io_callback_group_ = this->create_callback_group(
         rclcpp::CallbackGroupType::MutuallyExclusive);

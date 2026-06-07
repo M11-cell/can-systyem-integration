@@ -28,6 +28,9 @@ add_library(
         SHARED
         src/can_util.cpp
         src/can_controller.cpp
+        src/can_connect.cpp
+        src/system_controller.cpp
+        src/spark_max_feedback.cpp
 )
 add_library(can_util::can_util ALIAS can_util)
 

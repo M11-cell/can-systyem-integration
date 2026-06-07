@@ -15,7 +15,7 @@
     <depend>std_msgs</depend>
     <depend>ros2_fmt_logger</depend>
     <depend>can_util</depend>
-    <depend>bab-board</depend>
+    <depend>bab_board</depend>
 
     <test_depend>ament_lint_auto</test_depend>
     <test_depend>ament_lint_common</test_depend>

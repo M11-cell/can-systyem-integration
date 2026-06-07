@@ -12,8 +12,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(ros2_fmt_logger REQUIRED)
-find_package(can_utils REQUIRED)
-find_package(bab-board REQUIRED)
+find_package(can_util REQUIRED)
+find_package(bab_board REQUIRED)
 
 include_directories(include)
 
@@ -29,7 +29,7 @@ ament_target_dependencies(
         sensor_msgs
         std_msgs
         can_util
-        bab-board
+        bab_board
 )
 
 install(TARGETS

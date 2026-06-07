@@ -22,33 +22,33 @@ namespace {
 ProduceDiagnostics::ProduceDiagnostics(rclcpp::Node& node,
                                        std::shared_ptr<BAB> bab_ptr,
                                        rclcpp::CallbackGroup::SharedPtr callback_group)
-    : node_(node),
-      updater_(std::make_shared<diagnostic_updater::Updater>(&node_)),
-      diagnostics_ptr_(std::move(bab_ptr)) {
-    updater_->setHardwareID("Rover-PowerBoard");
+    : node(node),
+      updater(std::make_shared<diagnostic_updater::Updater>(&node)),
+      bab(std::move(bab_ptr)) {
+    updater->setHardwareID("Rover-PowerBoard");
 
-    updater_->add("Battery Voltage Status", this, &ProduceDiagnostics::checkBatteryVoltage);
-    updater_->add("Rail Voltage Status", this, &ProduceDiagnostics::checkRailVoltage);
-    updater_->add("Battery Current Status", this, &ProduceDiagnostics::checkBatteryCurrent);
-    updater_->add("Rail Current Status", this, &ProduceDiagnostics::checkRailCurrent);
-    updater_->add("Rail Power Status", this, &ProduceDiagnostics::checkRailPower);
-    updater_->add("Battery Temperature Status", this, &ProduceDiagnostics::checkBatteryTemperature);
-    updater_->add("Rail Temperature Status", this, &ProduceDiagnostics::checkRailTemperature);
-    updater_->add("TCU Temperature Status", this, &ProduceDiagnostics::checkTCUTemperature);
-    updater_->add("TCU Module Status", this, &ProduceDiagnostics::checkTCUStatus);
-    updater_->add("Relay Module Status", this, &ProduceDiagnostics::checkRelayStatus);
+    updater->add("Battery Voltage Status", this, &ProduceDiagnostics::checkBatteryVoltage);
+    updater->add("Rail Voltage Status", this, &ProduceDiagnostics::checkRailVoltage);
+    updater->add("Battery Current Status", this, &ProduceDiagnostics::checkBatteryCurrent);
+    updater->add("Rail Current Status", this, &ProduceDiagnostics::checkRailCurrent);
+    updater->add("Rail Power Status", this, &ProduceDiagnostics::checkRailPower);
+    updater->add("Battery Temperature Status", this, &ProduceDiagnostics::checkBatteryTemperature);
+    updater->add("Rail Temperature Status", this, &ProduceDiagnostics::checkRailTemperature);
+    updater->add("TCU Temperature Status", this, &ProduceDiagnostics::checkTCUTemperature);
+    updater->add("TCU Module Status", this, &ProduceDiagnostics::checkTCUStatus);
+    updater->add("Relay Module Status", this, &ProduceDiagnostics::checkRelayStatus);
 
-    updater_->setPeriod(kUpdatePeriodSec);
-    diagnostics_timer_ = node_.create_wall_timer(
-        kUpdatePeriod,
+    updater->setPeriod(K_UPDATE_PERIOD_SEC);
+    diagnostics_timer = node.create_wall_timer(
+        K_UPDATE_PERIOD,
         [this]() {
-            DiagnosticsCallback();
+            diagnosticsCallback();
         },
         callback_group);
 }
 
 bool ProduceDiagnostics::ensureDiagnostics(diagnostic_updater::DiagnosticStatusWrapper& stat) const {
-    if (diagnostics_ptr_) {
+    if (bab) {
         return true;
     }
 
@@ -65,18 +65,18 @@ void ProduceDiagnostics::checkBatteryVoltage(diagnostic_updater::DiagnosticStatu
     std::string worst_msg = "Battery levels OK";
     bool any_data = false;
 
-    for (size_t i = 0; i < BAB::NUM_BATTERIES; ++i) {
-        if (!diagnostics_ptr_->batteryEverReceived(i)) {
+    for (size_t i = 0; i < BAB::BATTERIES_COUNT; ++i) {
+        if (!bab->batteryEverReceived(i)) {
             continue;
         }
         any_data = true;
-        const float v = diagnostics_ptr_->getBatteryVoltageLevel(i);
+        const float v = bab->getBatteryVoltageLevel(i);
         stat.add("Battery " + std::to_string(i + 1) + " Voltage (V)", v);
 
-        if (v > kBatteryVoltMax) {
+        if (v > K_BATTERY_VOLT_MAX) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
             worst_msg = "Battery voltage exceeding criticality, shut rover off immediately";
-        } else if (v < kBatteryVoltMin && worst < diagnostic_msgs::msg::DiagnosticStatus::WARN) {
+        } else if (v < K_BATTERY_VOLT_MIN && worst < diagnostic_msgs::msg::DiagnosticStatus::WARN) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             worst_msg = "Battery voltage low, replace batteries";
         }
@@ -98,18 +98,18 @@ void ProduceDiagnostics::checkRailVoltage(diagnostic_updater::DiagnosticStatusWr
     std::string worst_msg = "Rail voltage levels OK";
     bool any_data = false;
 
-    for (size_t i = 0; i < BAB::NUM_RAILS; ++i) {
-        if (!diagnostics_ptr_->railEverReceived(i)) {
+    for (size_t i = 0; i < BAB::RAILS_COUNT; ++i) {
+        if (!bab->railEverReceived(i)) {
             continue;
         }
         any_data = true;
-        const float v = diagnostics_ptr_->getRailVoltageLevel(i);
+        const float v = bab->getRailVoltageLevel(i);
         stat.add("Rail " + std::to_string(i + 1) + " Voltage (V)", v);
 
-        if (v > kRailVoltMax) {
+        if (v > K_RAIL_VOLT_MAX) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
             worst_msg = "Rail voltage exceeding criticality, shut rover off immediately";
-        } else if (v < kRailVoltMin && worst < diagnostic_msgs::msg::DiagnosticStatus::WARN) {
+        } else if (v < K_RAIL_VOLT_MIN && worst < diagnostic_msgs::msg::DiagnosticStatus::WARN) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             worst_msg = "Rail voltages reaching low levels, battery may be dying";
         }
@@ -131,23 +131,23 @@ void ProduceDiagnostics::checkBatteryCurrent(diagnostic_updater::DiagnosticStatu
     std::string worst_msg = "Battery current draw OK";
     bool any_data = false;
 
-    for (size_t i = 0; i < BAB::NUM_BATTERIES; ++i) {
-        if (!diagnostics_ptr_->batteryEverReceived(i)) {
+    for (size_t i = 0; i < BAB::BATTERIES_COUNT; ++i) {
+        if (!bab->batteryEverReceived(i)) {
             continue;
         }
         any_data = true;
-        const float current = diagnostics_ptr_->getBatteryCurrentLevel(i);
+        const float current = bab->getBatteryCurrentLevel(i);
         stat.add("Battery " + std::to_string(i + 1) + " Current (A)", current);
 
-        if (current >= kBatteryCurrentFailMin) {
+        if (current >= K_BATTERY_CURRENT_FAIL_MIN) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
             worst_msg = "Battery current draw so high, potential failure detected";
-            fault_detected_ = true;
-        } else if (current >= kBatteryCurrentErrorMin) {
+            fault_detected = true;
+        } else if (current >= K_BATTERY_CURRENT_ERROR_MIN) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
             worst_msg = "Battery current draw exceeding high levels, shutting rover off";
-            fault_detected_ = true;
-        } else if (current >= kBatteryCurrentWarnMin &&
+            fault_detected = true;
+        } else if (current >= K_BATTERY_CURRENT_WARN_MIN &&
             worst < diagnostic_msgs::msg::DiagnosticStatus::WARN) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             worst_msg = "Battery current draw is high";
@@ -170,18 +170,18 @@ void ProduceDiagnostics::checkRailCurrent(diagnostic_updater::DiagnosticStatusWr
     std::string worst_msg = "Rail current levels OK";
     bool any_data = false;
 
-    for (size_t i = 0; i < BAB::NUM_RAILS; ++i) {
-        if (!diagnostics_ptr_->railEverReceived(i)) {
+    for (size_t i = 0; i < BAB::RAILS_COUNT; ++i) {
+        if (!bab->railEverReceived(i)) {
             continue;
         }
         any_data = true;
-        const float current = diagnostics_ptr_->getRailCurrent(i);
+        const float current = bab->getRailCurrent(i);
         stat.add("Rail " + std::to_string(i + 1) + " Current (A)", current);
 
-        if (current >= kRailCurrentErrorMin) {
+        if (current >= K_RAIL_CURRENT_ERROR_MIN) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
             worst_msg = "Current level on rail is dangerously high, shutting rover off now";
-            fault_detected_ = true;
+            fault_detected = true;
         }
     }
 
@@ -198,13 +198,13 @@ void ProduceDiagnostics::checkRailPower(diagnostic_updater::DiagnosticStatusWrap
     }
 
     bool any_data = false;
-    for (size_t i = 0; i < BAB::NUM_RAILS; ++i) {
-        if (!diagnostics_ptr_->railEverReceived(i)) {
+    for (size_t i = 0; i < BAB::RAILS_COUNT; ++i) {
+        if (!bab->railEverReceived(i)) {
             continue;
         }
         any_data = true;
         stat.add("Rail " + std::to_string(i + 1) + " Power (W)",
-                 diagnostics_ptr_->getRailPower(i));
+                 bab->getRailPower(i));
     }
 
     if (!any_data) {
@@ -223,14 +223,14 @@ void ProduceDiagnostics::checkBatteryTemperature(diagnostic_updater::DiagnosticS
     std::string worst_msg = "Battery temperature OK";
     bool any_data = false;
 
-    for (size_t i = 0; i < BAB::NUM_BATTERIES; ++i) {
-        if (!diagnostics_ptr_->batteryEverReceived(i)) {
+    for (size_t i = 0; i < BAB::BATTERIES_COUNT; ++i) {
+        if (!bab->batteryEverReceived(i)) {
             continue;
         }
         any_data = true;
-        const float temp = diagnostics_ptr_->getBatteryTemp(i);
+        const float temp = bab->getBatteryTemp(i);
         stat.add("Battery " + std::to_string(i + 1) + " Temperature (C)", temp);
-        if (temp >= kTempWarnMin && worst < diagnostic_msgs::msg::DiagnosticStatus::WARN) {
+        if (temp >= K_TEMP_WARN_MIN && worst < diagnostic_msgs::msg::DiagnosticStatus::WARN) {
             worst = diagnostic_msgs::msg::DiagnosticStatus::WARN;
             worst_msg = "Warning, battery is overheating";
         }
@@ -249,7 +249,7 @@ void ProduceDiagnostics::checkRailTemperature(diagnostic_updater::DiagnosticStat
     }
 
     // Firmware does not transmit rail temperature; field is always 0.
-    stat.add("Rail Temperature (C)", diagnostics_ptr_->getRailTemp());
+    stat.add("Rail Temperature (C)", bab->getRailTemp());
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Rail temperature OK");
 }
 
@@ -258,7 +258,7 @@ void ProduceDiagnostics::checkTCUTemperature(diagnostic_updater::DiagnosticStatu
         return;
     }
 
-    const float tcu_temp = diagnostics_ptr_->getTCUTemp();
+    const float tcu_temp = bab->getTCUTemp();
     stat.add("TCU Temperature (C)", tcu_temp);
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "TCU temperature OK");
 }
@@ -268,7 +268,7 @@ void ProduceDiagnostics::checkTCUStatus(diagnostic_updater::DiagnosticStatusWrap
         return;
     }
 
-    const std::string tcu_status = diagnostics_ptr_->getTCUStatus();
+    const std::string tcu_status = bab->getTCUStatus();
     stat.add("TCU Status", tcu_status);
 
     if (tcu_status == "TCU ON") {
@@ -284,8 +284,8 @@ void ProduceDiagnostics::checkRelayStatus(diagnostic_updater::DiagnosticStatusWr
     }
 
     bool all_closed = true;
-    for (size_t i = 0; i < BAB::NUM_RELAYS; ++i) {
-        const bool closed = diagnostics_ptr_->getRelayClosed(i);
+    for (size_t i = 0; i < BAB::RELAYS_COUNT; ++i) {
+        const bool closed = bab->getRelayClosed(i);
         stat.add("Relay " + std::to_string(i + 1) + " Status",
                  closed ? "Closed (ON)" : "OPEN (OFF)");
         if (!closed) {
@@ -300,18 +300,18 @@ void ProduceDiagnostics::checkRelayStatus(diagnostic_updater::DiagnosticStatusWr
     }
 }
 
-void ProduceDiagnostics::DiagnosticsCallback() {
-    updater_->force_update();
+void ProduceDiagnostics::diagnosticsCallback() {
+    updater->force_update();
 
-    if (!diagnostics_ptr_) {
+    if (!bab) {
         return;
     }
 
-    if (fault_detected_ && !shutdown_sent_) {
+    if (fault_detected && !shutdown_sent) {
         RCLCPP_ERROR(
-            node_.get_logger(),
+            node.get_logger(),
             "Overcurrent detected on BAB telemetry — shutdown command NOT sent "
             "(BAB command TX disabled until bench validation)");
-        shutdown_sent_ = true;
+        shutdown_sent = true;
     }
 }

@@ -26,11 +26,11 @@ namespace wheels_interface {
 
     class RoverSystemWheelsHardware : public hardware_interface::SystemInterface {
     public:
-        RCLCPP_SMART_PTR_DEFINITIONS(RoverSystemWheelsHardware);
+        RCLCPP_SMART_PTR_DEFINITIONS(RoverSystemWheelsHardware)
 
         // TODO 2026-02-26 (Will Free): Finish flushing this out
         struct WheelDescription {
-            RCLCPP_SMART_PTR_DEFINITIONS(WheelDescription);
+            RCLCPP_SMART_PTR_DEFINITIONS(WheelDescription)
 
             SparkMax::SharedPtr motor;
             std::string name;

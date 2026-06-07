@@ -13,8 +13,38 @@ namespace can_util {
     CANController::CANController(std::string path, rclcpp::Logger logger) : logger(logger.get_child("can_controller")), path(std::move(path)) {}
 
     CANController::~CANController() {
-        readThread.join();
-        // TODO 2026-05-26 (Will Free): clean up & close socket
+        shutdown();
+    }
+
+    void CANController::stop() {
+        stop_.store(true, std::memory_order_release);
+
+        {
+            std::lock_guard lock(mtx);
+            const int fd = socket_descriptor;
+            socket_descriptor = -1;
+            if (fd >= 0) {
+                ::shutdown(fd, SHUT_RDWR);
+                ::close(fd);
+            }
+        }
+
+        if (readThread.joinable()) {
+            readThread.join();
+        }
+    }
+
+    void CANController::shutdown() {
+        stop_.store(true, std::memory_order_release);
+        const int fd = socket_descriptor;
+        if (fd >= 0) {
+            ::shutdown(fd, SHUT_RDWR);
+            ::close(fd);
+        }
+        if (readThread.joinable()) {
+            readThread.join();
+        }
+        socket_descriptor = -1;
     }
 
     bool CANController::initialize() {
@@ -29,6 +59,7 @@ namespace can_util {
 
         if (path.length() > IF_NAMESIZE) {
             logger.fatal("CAN interface name is longer than the maximum length of {}.", IF_NAMESIZE);
+            shutdown();
             return false;
         }
 
@@ -40,7 +71,7 @@ namespace can_util {
         if (ioctl(socket_descriptor, SIOCGIFINDEX, &ifr) == -1) {
             logger.fatal("ioctl error: {} ({})\nPossible causes:\n1. CAN interface does not exist\n2. CAN bus not initialized\n3. CAN interface is not up",
                          strerror(errno), errno);
-            close(socket_descriptor);
+            shutdown();
             return false;
         }
 
@@ -53,7 +84,7 @@ namespace can_util {
         // cast sockaddr_can* to a sockaddr*, as bind() uses a sockaddr* even though it can accept a sockaddr_can* for SocketCan
         if (bind(socket_descriptor, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
             logger.fatal("bind error: {} ({})\nPossible cause: Another program may be using this interface", strerror(errno), errno);
-            close(socket_descriptor);
+            shutdown();
             return false;
         }
 
@@ -70,7 +101,7 @@ namespace can_util {
         // }
 
         readThread = std::thread([this] {
-            while (rclcpp::ok()) {
+            while (!stop_.load(std::memory_order_acquire) && rclcpp::ok()) {
                 if (auto frame = can_frame{}; readFrameIfAvailable(frame) == true) {
                     const auto id = frame.can_id & CAN_EFF_MASK;
                     // ReSharper disable once CppTemplateArgumentsCanBeDeduced
