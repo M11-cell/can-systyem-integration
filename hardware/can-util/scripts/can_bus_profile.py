@@ -54,12 +54,18 @@ def decode_arb_id(raw: int) -> int:
 SPARK_STATUS0_TYPE = 0x0205B800
 SPARK_STATUS1_TYPE = 0x0205B840
 SPARK_STATUS2_TYPE = 0x0205B880
-SPARK_LEGACY_TYPE_MASK = 0x1FFFF000
-SPARK_LEGACY_TYPE_VAL = 0x020518000
+SPARK_LEGACY_PERIOD0_TYPE = 0x02051800
+SPARK_LEGACY_PERIOD1_TYPE = 0x02051840
+SPARK_LEGACY_PERIOD2_TYPE = 0x02051880
+SPARK_LEGACY_PERIOD3_TYPE = 0x020518C0
+SPARK_LEGACY_PERIOD4_TYPE = 0x02051900
+SPARK_SET_STATUSES_TYPE = 0x02050400
+SPARK_REQUEST_STATUS_TYPE = 0x020502C0
 
-# (COMMAND_PREFIX_VELOCITY_CONTROL << 8) after CAN_EFF_MASK — see system_controller.cpp
-WHEEL_VEL_PREFIX = 0x02050400
-WHEEL_VEL_MASK = 0xFFFFFF00
+# Wheel RPM command: (COMMAND_PREFIX_VELOCITY_CONTROL << 8) | (device_id + 0x80)
+# see system_controller.cpp — api class 1 index 2, device field includes 0x80.
+WHEEL_VEL_TYPE = 0x02050480
+SPARK_FRAME_TYPE_MASK = 0x1FFFFFC0
 WHEEL_MAINTAIN_ID = 0x02052C80  # COMMAND_PREFIX_MAINTAIN_VELOCITY & CAN_EFF_MASK
 
 SERVO_PREFIX = 0x0C08C000
@@ -79,21 +85,33 @@ def classify(arb_id: int) -> str:
     devtype = (arb_id >> 24) & 0x1F
     mfr = (arb_id >> 16) & 0xFF
 
-    if (arb_id & WHEEL_VEL_MASK) == WHEEL_VEL_PREFIX:
+    frame_type = arb_id & SPARK_FRAME_TYPE_MASK
+    if frame_type == WHEEL_VEL_TYPE:
         return "wheel_cmd_velocity"
     if arb_id == WHEEL_MAINTAIN_ID:
         return "wheel_cmd_maintain_mask"
 
     if devtype == 0x02 and mfr == 0x05:
-        frame_type = arb_id & 0x1FFFFFC0
         if frame_type == SPARK_STATUS0_TYPE:
             return "spark_status_0"
         if frame_type == SPARK_STATUS1_TYPE:
             return "spark_status_1"
         if frame_type == SPARK_STATUS2_TYPE:
             return "spark_status_2"
-        if (arb_id & SPARK_LEGACY_TYPE_MASK) == SPARK_LEGACY_TYPE_VAL:
-            return "spark_legacy_status"
+        if frame_type == SPARK_LEGACY_PERIOD0_TYPE:
+            return "spark_legacy_period0"
+        if frame_type == SPARK_LEGACY_PERIOD1_TYPE:
+            return "spark_legacy_period1"
+        if frame_type == SPARK_LEGACY_PERIOD2_TYPE:
+            return "spark_legacy_period2"
+        if frame_type == SPARK_LEGACY_PERIOD3_TYPE:
+            return "spark_legacy_period3"
+        if frame_type == SPARK_LEGACY_PERIOD4_TYPE:
+            return "spark_legacy_period4"
+        if frame_type == SPARK_SET_STATUSES_TYPE:
+            return "spark_cmd_set_statuses"
+        if frame_type == SPARK_REQUEST_STATUS_TYPE:
+            return "spark_cmd_request_status"
         return "spark_other"
 
     if devtype == 0x10 and mfr == 0x81:

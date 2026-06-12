@@ -14,7 +14,26 @@ namespace
 constexpr float kAppliedOutputScale = 1.0f / 32442.0f;     // int16 -> [-1, 1]
 constexpr float kVoltageScale       = 0.0073260073f;       // uint12 -> V
 constexpr float kCurrentScale       = 0.0366300366f;       // uint12 -> A
+// Legacy Period0 duty cycle scale (matches wheels-interface SparkBase).
+constexpr float kLegacyDutyCycleScale = 1.0f / 32768.0f;
+// Legacy Period1 fixed-point scales (REV SPARK MAX / FRC protocol).
+constexpr float kLegacyVoltageScale = 1.0f / 128.0f;
+constexpr float kLegacyCurrentScale = 1.0f / 32.0f;
+// STATUS_0 default period is 10 ms; stop Period1 from overwriting V/I/T while
+// modern frames are still arriving.
+constexpr std::chrono::milliseconds kModernStatus0PreferWindow{50};
 }  // namespace
+
+bool isDecodedTelemetryFrameType(const uint32_t frame_type)
+{
+  return frame_type == kStatus0BaseId
+      || frame_type == kStatus2BaseId
+      || frame_type == kLegacyPeriod0BaseId
+      || frame_type == kLegacyPeriod1BaseId
+      || frame_type == kLegacyPeriod2BaseId
+      || frame_type == kLegacyPeriod3BaseId
+      || frame_type == kLegacyPeriod4BaseId;
+}
 
 SparkMaxFeedback::SparkMaxFeedback(std::shared_ptr<can_util::CANController> can,
                                    std::vector<uint8_t> device_ids)
@@ -79,6 +98,45 @@ bool SparkMaxFeedback::isStatus2Fresh(uint8_t device_id, std::chrono::millisecon
   return age <= max_age;
 }
 
+bool SparkMaxFeedback::isStatus0Fresh(uint8_t device_id, std::chrono::milliseconds max_age) const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto it = feedback_.find(device_id);
+  if (it == feedback_.end() || !it->second.status0_seen) {
+    return false;
+  }
+  const auto age = std::chrono::steady_clock::now() - it->second.status0_stamp;
+  return age <= max_age;
+}
+
+bool SparkMaxFeedback::isVitFresh(uint8_t device_id, std::chrono::milliseconds max_age) const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto it = feedback_.find(device_id);
+  if (it == feedback_.end()) {
+    return false;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  const auto & fb = it->second;
+  if (fb.status0_seen && (now - fb.status0_stamp) <= max_age) {
+    return true;
+  }
+  if (fb.legacy_vit_seen && (now - fb.legacy_vit_stamp) <= max_age) {
+    return true;
+  }
+  return false;
+}
+
+bool SparkMaxFeedback::hasVitTelemetry(uint8_t device_id) const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto it = feedback_.find(device_id);
+  if (it == feedback_.end()) {
+    return false;
+  }
+  return it->second.status0_seen || it->second.legacy_vit_seen;
+}
+
 void SparkMaxFeedback::onFrame(uint32_t id, const std::vector<uint8_t> & data)
 {
   // The CANController callback delivers the raw 29-bit ID (no EFF flag).
@@ -109,6 +167,12 @@ void SparkMaxFeedback::onFrame(uint32_t id, const std::vector<uint8_t> & data)
     decodeStatus0(device_id, data);
   } else if (frame_type == kStatus2BaseId) {
     decodeStatus2(device_id, data);
+  } else if (frame_type == kLegacyPeriod0BaseId) {
+    decodeLegacyPeriod0(device_id, data);
+  } else if (frame_type == kLegacyPeriod1BaseId) {
+    decodeLegacyPeriod1(device_id, data);
+  } else if (frame_type == kLegacyPeriod2BaseId) {
+    decodeLegacyPeriod2(device_id, data);
   }
 }
 
@@ -143,6 +207,7 @@ void SparkMaxFeedback::decodeStatus0(uint8_t device_id, const std::vector<uint8_
   fb.current_a           = static_cast<float>(current_raw) * kCurrentScale;
   fb.motor_temperature_c = static_cast<float>(temp_raw);
   fb.status0_stamp       = now;
+  fb.status0_seen        = true;
 }
 
 void SparkMaxFeedback::decodeStatus2(uint8_t device_id, const std::vector<uint8_t> & data)
@@ -159,6 +224,81 @@ void SparkMaxFeedback::decodeStatus2(uint8_t device_id, const std::vector<uint8_
   std::lock_guard<std::mutex> lk(mutex_);
   auto & fb = feedback_[device_id];
   fb.velocity_rpm  = velocity_rpm;
+  fb.position_rot  = position_rot;
+  fb.status2_stamp = now;
+  fb.status2_seen  = true;
+}
+
+void SparkMaxFeedback::decodeLegacyPeriod0(uint8_t device_id, const std::vector<uint8_t> & data)
+{
+  if (data.size() < 8) {
+    return;
+  }
+
+  uint64_t raw = 0;
+  for (int i = 0; i < 8; ++i) {
+    raw |= static_cast<uint64_t>(data[i]) << (8 * i);
+  }
+
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto & fb = feedback_[device_id];
+  fb.applied_output = static_cast<float>(static_cast<int16_t>(raw & 0xFFFFu)) * kLegacyDutyCycleScale;
+}
+
+void SparkMaxFeedback::decodeLegacyPeriod1(uint8_t device_id, const std::vector<uint8_t> & data)
+{
+  if (data.size() < 8) {
+    return;
+  }
+
+  uint64_t raw = 0;
+  for (int i = 0; i < 8; ++i) {
+    raw |= static_cast<uint64_t>(data[i]) << (8 * i);
+  }
+
+  const uint32_t velocity_bits = static_cast<uint32_t>(raw & 0xFFFFFFFFu);
+  float velocity_rpm = 0.0f;
+  std::memcpy(&velocity_rpm, &velocity_bits, sizeof(float));
+
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto & fb = feedback_[device_id];
+  fb.velocity_rpm = velocity_rpm;
+  fb.status2_stamp = now;
+  fb.status2_seen  = true;
+
+  const bool modern_fresh = fb.status0_seen &&
+    (now - fb.status0_stamp) <= kModernStatus0PreferWindow;
+  if (modern_fresh) {
+    return;
+  }
+
+  // Non-overlapping 12-bit fields (see spark_max_feedback.hpp Period1 layout).
+  fb.motor_temperature_c = static_cast<float>((raw >> 32) & 0xFFu);
+  fb.bus_voltage_v = static_cast<float>((raw >> 40) & 0xFFFu) * kLegacyVoltageScale;
+  fb.current_a     = static_cast<float>((raw >> 52) & 0xFFFu) * kLegacyCurrentScale;
+  fb.legacy_vit_stamp = now;
+  fb.legacy_vit_seen  = true;
+}
+
+void SparkMaxFeedback::decodeLegacyPeriod2(uint8_t device_id, const std::vector<uint8_t> & data)
+{
+  if (data.size() < 8) {
+    return;
+  }
+
+  uint64_t raw = 0;
+  for (int i = 0; i < 8; ++i) {
+    raw |= static_cast<uint64_t>(data[i]) << (8 * i);
+  }
+
+  const uint32_t position_bits = static_cast<uint32_t>(raw & 0xFFFFFFFFu);
+  float position_rot = 0.0f;
+  std::memcpy(&position_rot, &position_bits, sizeof(float));
+
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard<std::mutex> lk(mutex_);
+  auto & fb = feedback_[device_id];
   fb.position_rot  = position_rot;
   fb.status2_stamp = now;
   fb.status2_seen  = true;
