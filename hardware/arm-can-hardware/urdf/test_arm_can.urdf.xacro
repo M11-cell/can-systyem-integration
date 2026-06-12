@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<!--
+  Minimal robot + ros2_control block for bench-testing ArmCanInterface.
+  Launch via:
+    ros2 launch arm_can_hardware arm_can_bench.launch.py can_interface:=can0
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="test_arm_can">
+  <xacro:arg name="can_interface" default="can0"/>
+
+  <xacro:macro name="bench_joint" params="joint_name link_name xyz:='0 0 0'">
+    <link name="${link_name}">
+      <inertial>
+        <mass value="0.5"/>
+        <inertia ixx="1e-4" ixy="0" ixz="0" iyy="1e-4" iyz="0" izz="1e-4"/>
+      </inertial>
+    </link>
+    <joint name="${joint_name}" type="revolute">
+      <parent link="base_link"/>
+      <child link="${link_name}"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-3.14" upper="3.14" effort="10" velocity="3.14"/>
+    </joint>
+  </xacro:macro>
+
+  <link name="base_link">
+    <inertial>
+      <mass value="5.0"/>
+      <inertia ixx="0.05" ixy="0" ixz="0" iyy="0.05" iyz="0" izz="0.05"/>
+    </inertial>
+  </link>
+
+  <xacro:bench_joint joint_name="joint1" link_name="link1" xyz="0 0 0.1"/>
+  <xacro:bench_joint joint_name="joint2" link_name="link2" xyz="0 0 0.2"/>
+  <xacro:bench_joint joint_name="joint3" link_name="link3" xyz="0 0 0.3"/>
+  <xacro:bench_joint joint_name="joint5" link_name="link5" xyz="0 0 0.4"/>
+
+  <xacro:include filename="$(find arm_can_hardware)/urdf/rover_arm_can.ros2_control.xacro"/>
+  <xacro:rover_arm_can_ros2_control name="RoverArm" can_interface="$(arg can_interface)"/>
+</robot>

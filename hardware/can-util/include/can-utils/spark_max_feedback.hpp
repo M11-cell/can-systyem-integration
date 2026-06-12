@@ -1,9 +1,11 @@
 // spark_max_feedback.hpp
 //
-// Decode REV SPARK MAX periodic status frames (STATUS_0, STATUS_2) from the
-// CAN bus and provide thread-safe per-motor accessors. Also exposes a helper
-// to send the SET_STATUSES_ENABLED frame so STATUS_2 (velocity + position),
-// which is disabled by default, can be turned on at runtime.
+// Decode REV SPARK MAX periodic status frames from the CAN bus and provide
+// thread-safe per-motor accessors. Supports:
+//   - Modern STATUS_0 / STATUS_2 (api class 46, 0x0205B8xx)
+//   - Legacy Period0–2 (api class 6, 0x020518xx) used by many field SPARKs
+// Also exposes enableStatus2() to request STATUS_2 at runtime (may require
+// REV Hardware Client + flash on some firmware).
 //
 // References:
 //   https://github.com/REVrobotics/REV-Specs/blob/main/can-frames/spark-frames-2.0.0-dev.11
@@ -28,6 +30,14 @@
 //     enabled by default = false. Payload:
 //       bytes 0..3  float32 LE PRIMARY_ENCODER_VELOCITY (RPM)
 //       bytes 4..7  float32 LE PRIMARY_ENCODER_POSITION (rotations)
+//
+//   Legacy Period1 (apiClass=6, apiIndex=1) base 0x02051840, typical 20 ms:
+//       bits  0..31  float32 LE sensor velocity (RPM)
+//       bits 32..39  uint8  motor temperature (degC)
+//       bits 40..51  uint12 bus voltage (/128 -> V)
+//       bits 52..63  uint12 output current (/32 -> A)
+//     (Do not use 16-bit voltage @40 + 12-bit current @48 — those bit ranges
+//      overlap and produce phantom voltage spikes when current rises.)
 //
 // Command frame:
 //   SET_STATUSES_ENABLED (apiClass=1, apiIndex=0) base 0x02050400, DLC 4,
@@ -62,6 +72,16 @@ constexpr uint32_t kStatus0BaseId            = 0x0205B800u;  // applied output, 
 constexpr uint32_t kStatus2BaseId            = 0x0205B880u;  // primary encoder velocity + position
 constexpr uint32_t kSetStatusesEnabledBaseId = 0x02050400u;  // command: enable/disable periodic frames
 
+// Legacy periodic status (api class 6) — factory-default on many SPARK MAX units.
+constexpr uint32_t kLegacyPeriod0BaseId = 0x02051800u;  // duty cycle, faults
+constexpr uint32_t kLegacyPeriod1BaseId = 0x02051840u;  // velocity, V, I, temp
+constexpr uint32_t kLegacyPeriod2BaseId = 0x02051880u;  // position, iAccum
+constexpr uint32_t kLegacyPeriod3BaseId = 0x020518C0u;  // analog velocity/position
+constexpr uint32_t kLegacyPeriod4BaseId = 0x02051900u;  // alt encoder velocity/position
+
+// True when frame_type (arb_id & kFrameTypeMask) is handled by SparkMaxFeedback.
+bool isDecodedTelemetryFrameType(uint32_t frame_type);
+
 // 6-bit mask for the device-id field in a SPARK MAX 29-bit CAN ID.
 constexpr uint32_t kDeviceIdMask = 0x3Fu;
 // Mask used to extract the API class + API index + frame type from an arbId,
@@ -80,10 +100,15 @@ struct WheelFeedback
   float current_a{0.0f};
   float motor_temperature_c{0.0f};
 
-  // Most recent times any STATUS_2 / STATUS_0 frame was decoded. Use for
-  // staleness checks (e.g. anti-slip should not trust feedback older than
-  // ~50 ms when STATUS_2 is enabled at 20 ms period).
+  // STATUS_0 (api class 46, 0x0205B8xx) — authoritative for V/I/T when present.
   std::chrono::steady_clock::time_point status0_stamp{};
+  bool status0_seen{false};
+
+  // Legacy Period1 V/I/T fallback when STATUS_0 is absent or stale.
+  std::chrono::steady_clock::time_point legacy_vit_stamp{};
+  bool legacy_vit_seen{false};
+
+  // STATUS_2 or legacy Period1/2 velocity/position.
   std::chrono::steady_clock::time_point status2_stamp{};
   bool status2_seen{false};
 };
@@ -109,10 +134,22 @@ public:
   // Convenience: did STATUS_2 arrive within the given freshness window?
   bool isStatus2Fresh(uint8_t device_id, std::chrono::milliseconds max_age) const;
 
+  // True STATUS_0 (0x0205B8xx) received within max_age.
+  bool isStatus0Fresh(uint8_t device_id, std::chrono::milliseconds max_age) const;
+
+  // V/I/T available: prefer fresh STATUS_0, else fresh legacy Period1 fallback.
+  bool isVitFresh(uint8_t device_id, std::chrono::milliseconds max_age) const;
+
+  // Ever received V/I/T from STATUS_0 and/or legacy Period1.
+  bool hasVitTelemetry(uint8_t device_id) const;
+
 private:
   void onFrame(uint32_t id, const std::vector<uint8_t> & data);
   void decodeStatus0(uint8_t device_id, const std::vector<uint8_t> & data);
   void decodeStatus2(uint8_t device_id, const std::vector<uint8_t> & data);
+  void decodeLegacyPeriod0(uint8_t device_id, const std::vector<uint8_t> & data);
+  void decodeLegacyPeriod1(uint8_t device_id, const std::vector<uint8_t> & data);
+  void decodeLegacyPeriod2(uint8_t device_id, const std::vector<uint8_t> & data);
 
   std::shared_ptr<can_util::CANController> can_;
   std::vector<uint8_t> device_ids_;
