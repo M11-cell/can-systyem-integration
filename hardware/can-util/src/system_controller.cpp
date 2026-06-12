@@ -44,6 +44,18 @@ uint32_t SystemFrameBuilder::sendWheelMotorVelocity(DeviceId::ID device_id, floa
     return can_manager_->sendBlockingFrame(frame); 
 }
 
+uint32_t SystemFrameBuilder::sendWheelMotorCurrent(DeviceId::ID device_id, float current_amps){
+
+    static_assert(sizeof(float) <= 8, "Error: Payload must be 8 bytes or less");
+    struct can_frame frame{};
+
+    frame.can_id = (COMMAND_PREFIX_CURRENT_CONTROL | static_cast<uint32_t>(device_id)) | CAN_EFF_FLAG;
+    frame.len = 8;
+
+    memcpy(frame.data, &current_amps, sizeof(float));
+    return can_manager_->sendBlockingFrame(frame);
+}
+
 //Function to send arm motor velocity to each motor
 void SystemFrameBuilder::sendArmMotorVelocity(deviceType::DeviceType deviceT, 
                                               Instructions::Inst motor_id, 

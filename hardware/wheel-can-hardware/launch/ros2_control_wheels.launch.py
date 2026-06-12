@@ -5,6 +5,12 @@ controller_manager logs forever::
 
     Waiting for data on 'robot_description' topic to finish initialization
 
+This launch ALWAYS starts the teleop chain — joy_node, joy_mux_controller,
+and skid_steer_mux — so the joystick drives the wheels through the
+velocity_controller out of the box. skid_steer_mux is the only publisher of
+/velocity_controller/commands here; do NOT also run wheel_bench_node on the
+same CAN interface (they are mutually exclusive wheel owners).
+
 Usage::
 
     source install/setup.bash
@@ -15,8 +21,11 @@ With odometry node (needs /joint_states from joint_state_broadcaster)::
     ros2 launch wheel_can_hardware ros2_control_wheels.launch.py \\
         can_interface:=can0 launch_odometry:=true
 
-Send velocity commands (six wheels, rad/s)::
+The teleop chain is on by default. To bring up only ros2_control (e.g. to
+publish /velocity_controller/commands manually), set launch_teleop:=false::
 
+    ros2 launch wheel_can_hardware ros2_control_wheels.launch.py \\
+        can_interface:=can0 launch_teleop:=false
     ros2 topic pub /velocity_controller/commands std_msgs/msg/Float64MultiArray \\
         "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
 
@@ -32,7 +41,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, TimerAction
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessStart
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -40,7 +49,18 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     pkg_share = get_package_share_directory('wheel_can_hardware')
     urdf_path = os.path.join(pkg_share, 'urdf', 'test_rover_wheels.urdf.xacro')
-    controllers_yaml = os.path.join(pkg_share, 'config', 'wheel_controllers.yaml')
+
+    # control_mode selects both the controllers file and the spawned controller:
+    # velocity -> velocity_controller, current -> effort_controller (bench).
+    controllers_yaml_velocity = os.path.join(pkg_share, 'config', 'wheel_controllers.yaml')
+    controllers_yaml_current = os.path.join(pkg_share, 'config', 'wheel_controllers_current.yaml')
+    is_current = ["'", LaunchConfiguration('control_mode'), "' == 'current'"]
+    controllers_yaml = PythonExpression(
+        ["'", controllers_yaml_current, "' if (", *is_current, ") else '", controllers_yaml_velocity, "'"]
+    )
+    wheel_controller_name = PythonExpression(
+        ["'effort_controller' if (", *is_current, ") else 'velocity_controller'"]
+    )
 
     can_interface_arg = DeclareLaunchArgument(
         'can_interface',
@@ -59,8 +79,31 @@ def generate_launch_description():
     )
     track_width_arg = DeclareLaunchArgument(
         'track_width',
-        default_value='1.25',
-        description='Track width (m) for wheel_odometry_node; autonomy wheel_separation is 1.25.',
+        default_value='0.591',
+        description='Track width (m) for skid_steer_mux and wheel_odometry_node.',
+    )
+    multiplier_arg = DeclareLaunchArgument(
+        'multiplier',
+        default_value='1250.0',
+        description='skid_steer_mux stick-to-motor-RPM gain.',
+    )
+    traction_mode_arg = DeclareLaunchArgument(
+        'traction_mode',
+        default_value='assist',
+        description='WheelCanInterface traction mode: off | assist | aggressive.',
+    )
+    control_mode_arg = DeclareLaunchArgument(
+        'control_mode',
+        default_value='velocity',
+        description=(
+            'WheelCanInterface command mode: velocity (velocity_controller) or '
+            'current (effort_controller, bench). Use launch_teleop:=false for current.'
+        ),
+    )
+    launch_teleop_arg = DeclareLaunchArgument(
+        'launch_teleop',
+        default_value='true',
+        description='If true, start joy_node + joy_mux_controller + skid_steer_mux.',
     )
     spawn_after_arg = DeclareLaunchArgument(
         'spawn_controller_delay',
@@ -78,6 +121,10 @@ def generate_launch_description():
                 urdf_path,
                 ' can_interface:=',
                 LaunchConfiguration('can_interface'),
+                ' traction_mode:=',
+                LaunchConfiguration('traction_mode'),
+                ' control_mode:=',
+                LaunchConfiguration('control_mode'),
             ]
         ),
         value_type=str,
@@ -124,7 +171,7 @@ def generate_launch_description():
         package='controller_manager',
         executable='spawner',
         arguments=[
-            'velocity_controller',
+            wheel_controller_name,
             '--controller-manager',
             '/controller_manager',
             '--controller-manager-timeout',
@@ -160,16 +207,58 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('launch_odometry')),
     )
 
+    # Teleop chain: joystick -> joy_mux_controller -> /cmd_vel + /rover/drive_mode
+    # -> skid_steer_mux -> /velocity_controller/commands. Always on unless
+    # launch_teleop:=false.
+    teleop_condition = IfCondition(LaunchConfiguration('launch_teleop'))
+
+    joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        name='joy_node',
+        output='screen',
+        condition=teleop_condition,
+    )
+
+    joy_mux_controller = Node(
+        package='joy_mux_controller_py',
+        executable='joy_mux_controller',
+        name='joy_mux_controller',
+        output='screen',
+        condition=teleop_condition,
+    )
+
+    skid_steer_mux = Node(
+        package='wheel_can_hardware',
+        executable='skid_steer_mux',
+        name='skid_steer_mux',
+        output='screen',
+        parameters=[
+            {
+                'track_width': LaunchConfiguration('track_width'),
+                'multiplier': LaunchConfiguration('multiplier'),
+            }
+        ],
+        condition=teleop_condition,
+    )
+
     return LaunchDescription(
         [
             can_interface_arg,
             launch_odom_arg,
             wheel_radius_arg,
             track_width_arg,
+            multiplier_arg,
+            traction_mode_arg,
+            control_mode_arg,
+            launch_teleop_arg,
             spawn_after_arg,
             robot_state_publisher,
             delayed_control_node,
             delayed_spawners,
             wheel_odometry_node,
+            joy_node,
+            joy_mux_controller,
+            skid_steer_mux,
         ]
     )

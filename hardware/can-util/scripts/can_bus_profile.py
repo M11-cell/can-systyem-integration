@@ -65,6 +65,8 @@ SPARK_REQUEST_STATUS_TYPE = 0x020502C0
 # Wheel RPM command: (COMMAND_PREFIX_VELOCITY_CONTROL << 8) | (device_id + 0x80)
 # see system_controller.cpp — api class 1 index 2, device field includes 0x80.
 WHEEL_VEL_TYPE = 0x02050480
+# Wheel current (torque) command: COMMAND_PREFIX_CURRENT_CONTROL | device_id.
+WHEEL_CURRENT_TYPE = 0x020514C0
 SPARK_FRAME_TYPE_MASK = 0x1FFFFFC0
 WHEEL_MAINTAIN_ID = 0x02052C80  # COMMAND_PREFIX_MAINTAIN_VELOCITY & CAN_EFF_MASK
 
@@ -88,6 +90,8 @@ def classify(arb_id: int) -> str:
     frame_type = arb_id & SPARK_FRAME_TYPE_MASK
     if frame_type == WHEEL_VEL_TYPE:
         return "wheel_cmd_velocity"
+    if frame_type == WHEEL_CURRENT_TYPE:
+        return "wheel_cmd_current"
     if arb_id == WHEEL_MAINTAIN_ID:
         return "wheel_cmd_maintain_mask"
 

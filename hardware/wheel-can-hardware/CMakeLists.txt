@@ -27,12 +27,21 @@ set(ODOM_DEPENDENCIES
   tf2_ros
 )
 
+set(MUX_DEPENDENCIES
+  rclcpp
+  geometry_msgs
+  std_msgs
+)
+
 find_package(ament_cmake REQUIRED)
 find_package(backward_ros REQUIRED)
 foreach(dep IN LISTS DEPENDENCIES)
   find_package(${dep} REQUIRED)
 endforeach()
 foreach(dep IN LISTS ODOM_DEPENDENCIES)
+  find_package(${dep} REQUIRED)
+endforeach()
+foreach(dep IN LISTS MUX_DEPENDENCIES)
   find_package(${dep} REQUIRED)
 endforeach()
 
@@ -77,6 +86,11 @@ add_executable(wheel_bench_node
 )
 ament_target_dependencies(wheel_bench_node rclcpp geometry_msgs can_util ros2_fmt_logger)
 
+add_executable(skid_steer_mux
+  src/skid_steer_mux.cpp
+)
+ament_target_dependencies(skid_steer_mux ${MUX_DEPENDENCIES})
+
 install(
   TARGETS wheel_can_interface
   EXPORT export_${PROJECT_NAME}
@@ -86,7 +100,7 @@ install(
 )
 
 install(
-  TARGETS wheel_odometry_node wheel_bench_node
+  TARGETS wheel_odometry_node wheel_bench_node skid_steer_mux
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
