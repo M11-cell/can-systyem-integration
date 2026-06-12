@@ -79,17 +79,51 @@ private:
     CURRENT_PID  // Level 3: PID + STATUS_0 current threshold to back off stalls
   };
 
-  // Apply the configured anti-slip strategy to one wheel's commanded RPM
-  // using its measured RPM. Returns the corrected motor RPM. If anti-slip
-  // is disabled or feedback is stale, returns target_rpm unchanged.
+  // Traction mode selector (string param "traction_mode" in URDF / YAML).
+  // Traction redistributes a side's RPM share toward gripping wheels before
+  // anti-slip runs; see applyWheelCorrection().
+  enum class TractionMode
+  {
+    OFF,         // target_rpm == commanded_rpm
+    ASSIST,      // redistribute using traction_min_weight floor
+    AGGRESSIVE   // same but with a lower effective min weight
+  };
+
+  // Run the full per-cycle correction for all wheels:
+  //   commanded_rpm --(traction, per-side renormalize)--> target_rpm
+  //                 --(anti-slip vs target only)--------> output_rpm
+  // Anti-slip uses target_rpm as its setpoint, never commanded_rpm. All input
+  // vectors are indexed by wheel and sized wheels_.size(); outputs are resized
+  // to match.
+  void applyWheelCorrection(const std::vector<float> & commanded_rpm,
+                            const std::vector<float> & measured_rpm,
+                            const std::vector<float> & current_a,
+                            const std::vector<uint8_t> & feedback_fresh,
+                            std::vector<float> & target_rpm,
+                            std::vector<float> & output_rpm);
+
+  // Apply the given anti-slip strategy to one wheel using target_rpm as the
+  // setpoint and its measured RPM. Returns the corrected motor RPM. If the
+  // mode is OFF or feedback is stale, returns target_rpm unchanged.
   //
-  // motor_current_a is the SPARK MAX STATUS_0 current draw in amperes,
-  // used by CURRENT_PID to detect stalled wheels (high current + low
-  // velocity) and back off the demand instead of fighting the obstacle.
-  float applyAntiSlip(size_t wheel_index, float target_rpm, float measured_rpm,
+  // motor_current_a is the SPARK MAX current draw in amperes, used by
+  // CURRENT_PID to detect stalled wheels (high current + low velocity) and
+  // back off the demand instead of fighting the obstacle.
+  float applyAntiSlip(AntiSlipMode mode, float target_rpm, float measured_rpm,
                       float motor_current_a, bool feedback_fresh);
 
+  // Wheel command mode. VELOCITY sends RPM setpoints (with traction +
+  // anti-slip); CURRENT sends amperes for torque-like control (open loop,
+  // no traction / anti-slip — Phase 4 bench mode).
+  enum class ControlMode
+  {
+    VELOCITY,
+    CURRENT
+  };
+
   static AntiSlipMode parseMode(const std::string & s);
+  static TractionMode parseTractionMode(const std::string & s);
+  static ControlMode parseControlMode(const std::string & s);
 
   static std::string getParam(const hardware_interface::ComponentInfo & joint,
                               const std::string & key,
@@ -103,14 +137,27 @@ private:
   bool send_heartbeat_on_activate_{true};
   uint64_t heartbeat_motor_mask_{0x7Eu};
 
+  // Command mode. CURRENT exports an effort command interface (amperes).
+  ControlMode control_mode_{ControlMode::VELOCITY};
+  float max_current_a_{40.0f};   // magnitude clamp on the current setpoint
+
   // Anti-slip configuration. Defaults match the plan's Phase 5 values.
   AntiSlipMode anti_slip_mode_{AntiSlipMode::PID};
   float  slip_threshold_{0.30f};        // |actual - target| / max(|target|, 1) over which we react
   float  slip_kp_{0.10f};               // proportional gain on the (target - actual) error
   float  max_slip_correction_{0.50f};   // max fraction of |target| to add as correction
-  float  feedback_freshness_ms_{50.0f};
-  float  stall_current_a_{30.0f};       // STATUS_0 current above which we treat the wheel as stalled
+  float  feedback_freshness_ms_{100.0f};
+  float  stall_current_a_{25.0f};       // current above which we treat the wheel as stalled
   float  stall_relief_factor_{0.50f};   // multiplicative reduction applied when a stall is detected
+
+  // Traction configuration (Step A of applyWheelCorrection). Defaults keep
+  // traction off so behaviour is unchanged unless the URDF opts in.
+  TractionMode traction_mode_{TractionMode::OFF};
+  float  traction_slip_free_threshold_{0.4f};   // slip-vs-cmd above which a wheel is "free spinning"
+  float  traction_slip_stall_threshold_{-0.3f}; // slip-vs-cmd below which a wheel is "dragging/stalled"
+  float  traction_min_weight_{0.1f};            // floor on a wheel's redistribution weight
+  float  traction_low_load_a_{2.0f};            // current below which a free-spinning wheel is airborne
+  float  traction_weight_k_{0.5f};              // proportional weight reduction per unit slip
 
   std::shared_ptr<can_util::CANController>      can_controller_;
   std::unique_ptr<SystemFrameBuilder>           frame_builder_;
@@ -122,9 +169,13 @@ private:
   std::vector<double> hw_states_position_;
   std::vector<double> hw_states_velocity_;
   std::vector<double> hw_commands_velocity_;
+  std::vector<double> hw_commands_effort_;   // amperes, used in CURRENT mode
 
   // Last computed motor RPM per wheel; used for diagnostics / debug logging.
   std::vector<float> last_motor_rpm_cmd_;
+
+  // Throttle for the optional per-wheel traction diagnostic log.
+  std::chrono::steady_clock::time_point last_diag_log_{};
 
   rclcpp::Logger logger_{rclcpp::get_logger("wheel_can_interface")};
 };

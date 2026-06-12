@@ -6,6 +6,8 @@
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="test_rover_wheels">
   <xacro:arg name="can_interface" default="can0"/>
+  <xacro:arg name="traction_mode" default="assist"/>
+  <xacro:arg name="control_mode" default="velocity"/>
 
   <!-- Minimal kinematic tree: ros2_control joint names must exist in URDF. -->
   <xacro:macro name="bench_wheel" params="joint_name link_name xyz:='0 0 0'">
@@ -38,5 +40,5 @@
   <xacro:bench_wheel joint_name="wheel_left_rear"    link_name="wheel_left_rear_link"    xyz="-0.4 0.6 0"/>
 
   <xacro:include filename="$(find wheel_can_hardware)/urdf/rover_wheels.ros2_control.xacro"/>
-  <xacro:rover_wheels_ros2_control name="RoverWheels" can_interface="$(arg can_interface)"/>
+  <xacro:rover_wheels_ros2_control name="RoverWheels" can_interface="$(arg can_interface)" traction_mode="$(arg traction_mode)" control_mode="$(arg control_mode)"/>
 </robot>

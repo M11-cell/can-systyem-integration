@@ -74,22 +74,37 @@ hardware_interface::CallbackReturn WheelCanInterface::on_init(
   try { slip_threshold_        = std::stof(getParam(hp, "slip_threshold",        "0.30")); } catch (...) {}
   try { slip_kp_               = std::stof(getParam(hp, "slip_kp",               "0.10")); } catch (...) {}
   try { max_slip_correction_   = std::stof(getParam(hp, "max_slip_correction",   "0.50")); } catch (...) {}
-  try { feedback_freshness_ms_ = std::stof(getParam(hp, "feedback_freshness_ms", "50.0")); } catch (...) {}
+  try { feedback_freshness_ms_ = std::stof(getParam(hp, "feedback_freshness_ms", "100.0")); } catch (...) {}
   try { stall_current_a_       = std::stof(getParam(hp, "stall_current_a",       "30.0")); } catch (...) {}
   try { stall_relief_factor_   = std::stof(getParam(hp, "stall_relief_factor",   "0.50")); } catch (...) {}
+
+  control_mode_ = parseControlMode(getParam(hp, "control_mode", "velocity"));
+  try { max_current_a_ = std::stof(getParam(hp, "max_current_a", "40.0")); } catch (...) {}
+
+  // Traction (Step A of applyWheelCorrection). Defaults keep it off.
+  traction_mode_ = parseTractionMode(getParam(hp, "traction_mode", "off"));
+  try { traction_slip_free_threshold_  = std::stof(getParam(hp, "traction_slip_free_threshold",  "0.4"));  } catch (...) {}
+  try { traction_slip_stall_threshold_ = std::stof(getParam(hp, "traction_slip_stall_threshold", "-0.3")); } catch (...) {}
+  try { traction_min_weight_           = std::stof(getParam(hp, "traction_min_weight",           "0.1"));  } catch (...) {}
+  try { traction_low_load_a_           = std::stof(getParam(hp, "traction_low_load_a",           "2.0"));  } catch (...) {}
+  try { traction_weight_k_             = std::stof(getParam(hp, "traction_weight_k",             "0.5"));  } catch (...) {}
 
   if (info_.joints.empty()) {
     RCLCPP_FATAL(logger_, "No wheel joints declared in <ros2_control>");
     return hardware_interface::CallbackReturn::ERROR;
   }
 
+  const std::string expected_cmd_if =
+    (control_mode_ == ControlMode::CURRENT) ? hardware_interface::HW_IF_EFFORT
+                                            : hardware_interface::HW_IF_VELOCITY;
+
   wheels_.clear();
   wheels_.reserve(info_.joints.size());
   for (const auto & joint : info_.joints) {
     if (joint.command_interfaces.size() != 1 ||
-        joint.command_interfaces[0].name != hardware_interface::HW_IF_VELOCITY) {
-      RCLCPP_FATAL(logger_, "Wheel joint '%s' must declare one velocity command interface",
-                   joint.name.c_str());
+        joint.command_interfaces[0].name != expected_cmd_if) {
+      RCLCPP_FATAL(logger_, "Wheel joint '%s' must declare one %s command interface",
+                   joint.name.c_str(), expected_cmd_if.c_str());
       return hardware_interface::CallbackReturn::ERROR;
     }
 
@@ -120,6 +135,7 @@ hardware_interface::CallbackReturn WheelCanInterface::on_init(
 
   const size_t n = wheels_.size();
   hw_commands_velocity_.assign(n, 0.0);
+  hw_commands_effort_.assign(n, 0.0);
   hw_states_position_.assign(n, std::numeric_limits<double>::quiet_NaN());
   hw_states_velocity_.assign(n, std::numeric_limits<double>::quiet_NaN());
   last_motor_rpm_cmd_.assign(n, 0.0f);
@@ -129,9 +145,16 @@ hardware_interface::CallbackReturn WheelCanInterface::on_init(
     (anti_slip_mode_ == AntiSlipMode::CLAMP)       ? "clamp"      :
     (anti_slip_mode_ == AntiSlipMode::PID)         ? "pid"        :
     /*CURRENT_PID*/                                  "current_pid";
+  const char * traction_str =
+    (traction_mode_ == TractionMode::OFF)        ? "off"    :
+    (traction_mode_ == TractionMode::ASSIST)     ? "assist" :
+    /*AGGRESSIVE*/                                 "aggressive";
+  const char * control_str =
+    (control_mode_ == ControlMode::CURRENT) ? "current" : "velocity";
   RCLCPP_INFO(logger_,
-              "Initialised WheelCanInterface with %zu wheels on CAN '%s' (anti_slip_mode=%s)",
-              wheels_.size(), can_interface_name_.c_str(), mode_str);
+              "Initialised WheelCanInterface with %zu wheels on CAN '%s' "
+              "(control_mode=%s, traction_mode=%s, anti_slip_mode=%s)",
+              wheels_.size(), can_interface_name_.c_str(), control_str, traction_str, mode_str);
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -141,6 +164,19 @@ WheelCanInterface::AntiSlipMode WheelCanInterface::parseMode(const std::string &
   if (s == "clamp")        return AntiSlipMode::CLAMP;
   if (s == "current_pid")  return AntiSlipMode::CURRENT_PID;
   return AntiSlipMode::PID;
+}
+
+WheelCanInterface::TractionMode WheelCanInterface::parseTractionMode(const std::string & s)
+{
+  if (s == "assist")      return TractionMode::ASSIST;
+  if (s == "aggressive")  return TractionMode::AGGRESSIVE;
+  return TractionMode::OFF;
+}
+
+WheelCanInterface::ControlMode WheelCanInterface::parseControlMode(const std::string & s)
+{
+  if (s == "current")  return ControlMode::CURRENT;
+  return ControlMode::VELOCITY;
 }
 
 hardware_interface::CallbackReturn WheelCanInterface::on_configure(const rclcpp_lifecycle::State & /*previous_state*/)
@@ -194,6 +230,7 @@ hardware_interface::CallbackReturn WheelCanInterface::on_configure(const rclcpp_
 hardware_interface::CallbackReturn WheelCanInterface::on_activate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
   std::fill(hw_commands_velocity_.begin(), hw_commands_velocity_.end(), 0.0);
+  std::fill(hw_commands_effort_.begin(), hw_commands_effort_.end(), 0.0);
   std::fill(last_motor_rpm_cmd_.begin(), last_motor_rpm_cmd_.end(), 0.0f);
 
   if (send_heartbeat_on_activate_ && frame_builder_) {
@@ -205,15 +242,20 @@ hardware_interface::CallbackReturn WheelCanInterface::on_activate(const rclcpp_l
 
 hardware_interface::CallbackReturn WheelCanInterface::on_deactivate(const rclcpp_lifecycle::State & /*previous_state*/)
 {
-  // Send a final zero velocity to every wheel to make sure nothing keeps
+  // Send a final zero setpoint to every wheel to make sure nothing keeps
   // moving once the controller is detached.
   if (frame_builder_) {
     for (const auto & w : wheels_) {
       const auto did = static_cast<DeviceId::ID>(w.device_id);
-      frame_builder_->sendWheelMotorVelocity(did, 0.0f);
+      if (control_mode_ == ControlMode::CURRENT) {
+        frame_builder_->sendWheelMotorCurrent(did, 0.0f);
+      } else {
+        frame_builder_->sendWheelMotorVelocity(did, 0.0f);
+      }
     }
   }
   std::fill(hw_commands_velocity_.begin(), hw_commands_velocity_.end(), 0.0);
+  std::fill(hw_commands_effort_.begin(), hw_commands_effort_.end(), 0.0);
   std::fill(last_motor_rpm_cmd_.begin(), last_motor_rpm_cmd_.end(), 0.0f);
   RCLCPP_INFO(logger_, "WheelCanInterface deactivated");
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -248,38 +290,73 @@ hardware_interface::return_type WheelCanInterface::write(const rclcpp::Time & /*
     return hardware_interface::return_type::ERROR;
   }
 
+  const size_t n = wheels_.size();
+
+  // Current (torque) mode is open loop: clamp the effort command to amperes
+  // and send it straight through. Traction and anti-slip do not apply.
+  if (control_mode_ == ControlMode::CURRENT) {
+    for (size_t i = 0; i < n; ++i) {
+      const WheelConfig & w = wheels_[i];
+      float amps = static_cast<float>(hw_commands_effort_[i]) * w.direction;
+      amps = std::clamp(amps, -max_current_a_, max_current_a_);
+      last_motor_rpm_cmd_[i] = amps;
+      const auto did = static_cast<DeviceId::ID>(w.device_id);
+      frame_builder_->sendWheelMotorCurrent(did, amps);
+    }
+    frame_builder_->startMotors(heartbeat_motor_mask_);
+    return hardware_interface::return_type::OK;
+  }
+
   spark_max::WheelFeedback fb{};
   const auto fresh_window = std::chrono::milliseconds(static_cast<int>(feedback_freshness_ms_));
 
-  for (size_t i = 0; i < wheels_.size(); ++i) {
-    const WheelConfig & w = wheels_[i];
+  // 1) Convert every controller command (rad/s at the wheel) into a SPARK MAX
+  //    setpoint (RPM at the motor shaft) and snapshot feedback for all wheels.
+  std::vector<float> commanded_rpm(n, 0.0f);
+  std::vector<float> measured_rpm(n, 0.0f);
+  std::vector<float> current_a(n, 0.0f);
+  std::vector<uint8_t> fresh(n, 0u);
 
-    // 1) Convert the controller command (rad/s at the wheel) into the
-    //    SPARK MAX setpoint (RPM at the motor shaft).
+  for (size_t i = 0; i < n; ++i) {
+    const WheelConfig & w = wheels_[i];
     const double wheel_rad_s = hw_commands_velocity_[i];
     const double motor_rpm   = wheel_rad_s * kRadSToRpm * static_cast<double>(w.gear_ratio);
-    float target_motor_rpm   = static_cast<float>(motor_rpm) * w.direction;
+    commanded_rpm[i] = static_cast<float>(motor_rpm) * w.direction;
 
-    // 2) Apply anti-slip correction using the latest STATUS_2 feedback (if
-    //    fresh enough; otherwise we trust the open-loop command). STATUS_0
-    //    current is read in the same snapshot for current-aware modes.
-    float measured_motor_rpm = 0.0f;
-    float motor_current_a    = 0.0f;
-    bool fresh = false;
     if (feedback_ && feedback_->getFeedback(w.device_id, fb) && fb.status2_seen) {
-      measured_motor_rpm = fb.velocity_rpm;
-      motor_current_a    = fb.current_a;
+      measured_rpm[i] = fb.velocity_rpm;
+      current_a[i]    = fb.current_a;
       const auto age = std::chrono::steady_clock::now() - fb.status2_stamp;
-      fresh = age <= fresh_window;
+      fresh[i] = (age <= fresh_window) ? 1u : 0u;
     }
-    const float corrected_motor_rpm = applyAntiSlip(i, target_motor_rpm,
-                                                    measured_motor_rpm,
-                                                    motor_current_a, fresh);
+  }
 
-    // 3) Send.
-    last_motor_rpm_cmd_[i] = corrected_motor_rpm;
-    const auto did = static_cast<DeviceId::ID>(w.device_id);
-    frame_builder_->sendWheelMotorVelocity(did, corrected_motor_rpm);
+  // 2) commanded -> target (traction) -> output (anti-slip vs target).
+  std::vector<float> target_rpm;
+  std::vector<float> output_rpm;
+  applyWheelCorrection(commanded_rpm, measured_rpm, current_a, fresh, target_rpm, output_rpm);
+
+  // 3) Send.
+  for (size_t i = 0; i < n; ++i) {
+    last_motor_rpm_cmd_[i] = output_rpm[i];
+    const auto did = static_cast<DeviceId::ID>(wheels_[i].device_id);
+    frame_builder_->sendWheelMotorVelocity(did, output_rpm[i]);
+  }
+
+  // Optional throttled diagnostic when traction is active: log the
+  // commanded / target / output / measured RPM per wheel once a second.
+  if (traction_mode_ != TractionMode::OFF) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_diag_log_ >= std::chrono::seconds(1)) {
+      last_diag_log_ = now;
+      for (size_t i = 0; i < n; ++i) {
+        RCLCPP_INFO(logger_,
+                    "[traction] %s cmd=%.0f tgt=%.0f out=%.0f meas=%.0f I=%.1fA%s",
+                    wheels_[i].name.c_str(), commanded_rpm[i], target_rpm[i],
+                    output_rpm[i], measured_rpm[i], current_a[i],
+                    fresh[i] ? "" : " (stale)");
+      }
+    }
   }
 
   // Re-issue the SPARK MAX heartbeat / start-motors frame on every cycle, as
@@ -289,18 +366,106 @@ hardware_interface::return_type WheelCanInterface::write(const rclcpp::Time & /*
   return hardware_interface::return_type::OK;
 }
 
-float WheelCanInterface::applyAntiSlip(size_t /*wheel_index*/,
+void WheelCanInterface::applyWheelCorrection(
+  const std::vector<float> & commanded_rpm,
+  const std::vector<float> & measured_rpm,
+  const std::vector<float> & current_a,
+  const std::vector<uint8_t> & feedback_fresh,
+  std::vector<float> & target_rpm,
+  std::vector<float> & output_rpm)
+{
+  const size_t n = wheels_.size();
+  target_rpm.assign(n, 0.0f);
+  output_rpm.assign(n, 0.0f);
+
+  const bool traction_on = (traction_mode_ != TractionMode::OFF);
+  // Aggressive lets a slipping wheel be cut harder (lower floor on its share).
+  const float min_weight = (traction_mode_ == TractionMode::AGGRESSIVE)
+                             ? std::min(traction_min_weight_, 0.05f)
+                             : traction_min_weight_;
+
+  // --- Step A: traction -> target_rpm ---
+  // slip_vs_cmd > 0  : spinning faster than commanded (possibly airborne)
+  // slip_vs_cmd < 0  : dragging / stalled
+  std::vector<float> slip_vs_cmd(n, 0.0f);
+  std::vector<float> weight(n, 1.0f);
+  for (size_t i = 0; i < n; ++i) {
+    const float denom = std::max(std::abs(commanded_rpm[i]), 1.0f);
+    slip_vs_cmd[i] = (measured_rpm[i] - commanded_rpm[i]) / denom;
+
+    if (!traction_on || !feedback_fresh[i]) {
+      weight[i] = 1.0f;
+    } else if (slip_vs_cmd[i] > traction_slip_free_threshold_ &&
+               std::abs(current_a[i]) < traction_low_load_a_) {
+      weight[i] = min_weight;  // free-spinning at low load -> likely airborne
+    } else if (slip_vs_cmd[i] < traction_slip_stall_threshold_ &&
+               std::abs(current_a[i]) > stall_current_a_) {
+      weight[i] = 1.0f;        // gripping hard -> keep full share
+    } else {
+      const float reduce = std::clamp(traction_weight_k_ * slip_vs_cmd[i],
+                                      0.0f, 1.0f - min_weight);
+      weight[i] = 1.0f - reduce;
+    }
+  }
+
+  if (!traction_on) {
+    target_rpm = commanded_rpm;
+  } else {
+    // Per-side renormalize so each side keeps its overall demand while
+    // shifting share toward the gripping wheels.
+    for (const WheelSide side : {WheelSide::RIGHT, WheelSide::LEFT}) {
+      float sum_cmd = 0.0f;
+      float sum_w = 0.0f;
+      for (size_t i = 0; i < n; ++i) {
+        if (wheels_[i].side != side) { continue; }
+        sum_cmd += std::abs(commanded_rpm[i]);
+        sum_w   += std::abs(commanded_rpm[i] * weight[i]);
+      }
+      for (size_t i = 0; i < n; ++i) {
+        if (wheels_[i].side != side) { continue; }
+        target_rpm[i] = (sum_w > 1e-3f)
+                          ? commanded_rpm[i] * weight[i] * (sum_cmd / sum_w)
+                          : 0.0f;
+      }
+    }
+
+    // Motor protect: a wheel that is both dragging and pulling high current is
+    // fighting an obstacle; relieve it rather than redistributing more onto it.
+    for (size_t i = 0; i < n; ++i) {
+      if (feedback_fresh[i] &&
+          slip_vs_cmd[i] < traction_slip_stall_threshold_ &&
+          std::abs(current_a[i]) > stall_current_a_) {
+        target_rpm[i] *= stall_relief_factor_;
+      }
+    }
+  }
+
+  // --- Step B: anti-slip vs target -> output_rpm ---
+  // With traction active the stall guard is handled in Step A, so CURRENT_PID
+  // degrades to plain PID to avoid double-counting current.
+  const AntiSlipMode eff_mode =
+    (traction_on && anti_slip_mode_ == AntiSlipMode::CURRENT_PID)
+      ? AntiSlipMode::PID
+      : anti_slip_mode_;
+
+  for (size_t i = 0; i < n; ++i) {
+    output_rpm[i] = applyAntiSlip(eff_mode, target_rpm[i], measured_rpm[i],
+                                  current_a[i], feedback_fresh[i] != 0u);
+  }
+}
+
+float WheelCanInterface::applyAntiSlip(AntiSlipMode mode,
                                        float target_rpm, float measured_rpm,
                                        float motor_current_a, bool feedback_fresh)
 {
-  if (anti_slip_mode_ == AntiSlipMode::OFF || !feedback_fresh) {
+  if (mode == AntiSlipMode::OFF || !feedback_fresh) {
     return target_rpm;
   }
 
-  // Slip ratio is signed: positive means the wheel is going faster than
-  // commanded (free-spinning), negative means it's lagging behind (stalled
-  // or being dragged). The denominator avoids division by zero at very low
-  // commanded speeds.
+  // Slip ratio is signed: positive means the wheel is going faster than its
+  // target (free-spinning), negative means it's lagging behind (stalled or
+  // being dragged). The denominator avoids division by zero at very low
+  // target speeds.
   const float denom = std::max(std::abs(target_rpm), 1.0f);
   const float slip_ratio = (measured_rpm - target_rpm) / denom;
 
@@ -308,7 +473,7 @@ float WheelCanInterface::applyAntiSlip(size_t /*wheel_index*/,
     return target_rpm;  // within tolerance, no action needed
   }
 
-  switch (anti_slip_mode_) {
+  switch (mode) {
     case AntiSlipMode::OFF:
       return target_rpm;
 
@@ -372,7 +537,11 @@ std::vector<hardware_interface::CommandInterface> WheelCanInterface::export_comm
   std::vector<hardware_interface::CommandInterface> ifs;
   ifs.reserve(wheels_.size());
   for (size_t i = 0; i < wheels_.size(); ++i) {
-    ifs.emplace_back(wheels_[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_velocity_[i]);
+    if (control_mode_ == ControlMode::CURRENT) {
+      ifs.emplace_back(wheels_[i].name, hardware_interface::HW_IF_EFFORT, &hw_commands_effort_[i]);
+    } else {
+      ifs.emplace_back(wheels_[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_velocity_[i]);
+    }
   }
   return ifs;
 }

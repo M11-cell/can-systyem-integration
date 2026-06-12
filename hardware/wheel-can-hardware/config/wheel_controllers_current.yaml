@@ -1,0 +1,37 @@
+# controller_manager config for CURRENT (torque-like) wheel control — bench.
+#
+# Requires: sudo apt install ros-jazzy-forward-command-controller
+#
+# Use with the WheelCanInterface control_mode:=current path, which exports an
+# effort command interface per wheel (amperes) instead of velocity. Drive the
+# wheels by publishing amperes to /effort_controller/commands:
+#
+#   ros2 launch wheel_can_hardware ros2_control_wheels.launch.py \
+#       can_interface:=can0 control_mode:=current launch_teleop:=false
+#   ros2 topic pub /effort_controller/commands std_msgs/msg/Float64MultiArray \
+#       "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
+#
+# Traction and anti-slip do NOT apply in current mode — the setpoint is sent
+# open loop (clamped to max_current_a in the hardware interface). This is a
+# bench utility; skid_steer_mux targets the velocity_controller, not this one.
+
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    effort_controller:
+      type: forward_command_controller/ForwardCommandController
+
+effort_controller:
+  ros__parameters:
+    joints:
+      - wheel_right_front
+      - wheel_right_mid
+      - wheel_right_rear
+      - wheel_left_front
+      - wheel_left_mid
+      - wheel_left_rear
+    interface_name: effort

@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy, JointState
 from geometry_msgs.msg import Twist
+from std_msgs.msg import UInt8
 
 from .vkb_layout import VKBButtonLayout, VKBAxesLayout  # noqa: F401 (re-exported for callers)
 
@@ -10,6 +11,14 @@ from .vkb_layout import VKBButtonLayout, VKBAxesLayout  # noqa: F401 (re-exporte
 _JOY_MIN_BUTTONS = 29
 _JOY_MIN_AXES = 8
 _ARM_JOINT_COUNT = 7
+
+
+class DriveMode:
+    """/rover/drive_mode (std_msgs/UInt8) values consumed by skid_steer_mux."""
+
+    NORMAL = 0
+    PIVOT_LEFT = 1
+    PIVOT_RIGHT = 2
 
 
 class ArmVelocityScale:
@@ -51,6 +60,7 @@ class JoyMuxController(Node):
 
         self.subscription = self.create_subscription(Joy, '/joy', self.joy_callback, 10)
         self.rover_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.drive_mode_pub = self.create_publisher(UInt8, '/rover/drive_mode', 10)
         self.arm_pub = self.create_publisher(JointState, '/arm_xyz_cmd', 10)
 
         period_s = 1.0 / max(0.1, max_cmd_publish_hz)
@@ -65,13 +75,25 @@ class JoyMuxController(Node):
         self._deadman_held = False
         self._prev_deadman = False
 
+        # _cached_twist holds the UNBOOSTED stick twist; the boost factor is
+        # applied (with ramp-down) in _tick so release decays smoothly.
         self._cached_twist: Twist | None = None
         self._cached_joint: JointState | None = None
+        self._drive_mode = DriveMode.NORMAL
 
         self._stop_burst_until: float = 0.0
         self._stop_burst_duration_s = self.declare_parameter(
-            "stop_burst_duration_s", 0.5
+            "stop_burst_duration_s", 1.0
         ).value
+
+        # Boost ramp-down: target boost is set instantly on press; on release
+        # the effective boost decays back toward 1.0 over boost_release_decay_s.
+        self._target_boost = 1.0
+        self._effective_boost = 1.0
+        self._boost_release_decay_s = self.declare_parameter(
+            "boost_release_decay_s", 0.4
+        ).value
+        self._last_tick_s = self.get_clock().now().nanoseconds * 1e-9
 
         # Mode-switch stop window: publish zeros on the mode we just left so
         # firmware without a watchdog actually halts.
@@ -100,7 +122,8 @@ class JoyMuxController(Node):
             f"mode_toggle_cooldown_s={self._mode_toggle_cooldown_s}, "
             f"arm_button_min_hold_s={self._arm_button_min_hold_s}, "
             f"rover_boost_trigger_up={self._rover_boost_trigger_up}, "
-            f"rover_boost_trigger_down={self._rover_boost_trigger_down}"
+            f"rover_boost_trigger_down={self._rover_boost_trigger_down}, "
+            f"boost_release_decay_s={self._boost_release_decay_s}"
         )
 
     def _publish_all_stop(self) -> None:
@@ -118,6 +141,27 @@ class JoyMuxController(Node):
         if buttons[VKBButtonLayout.TRIGGER_UP]:
             return self._rover_boost_trigger_up
         return 1.0
+
+    def _update_boost(self, dt: float) -> None:
+        """Track _effective_boost toward _target_boost.
+
+        Ramp up is instantaneous on press; release decays linearly back to 1.0
+        over boost_release_decay_s so the rover slows gradually instead of
+        dropping speed abruptly when the trigger is let go.
+        """
+        if self._target_boost >= self._effective_boost:
+            self._effective_boost = self._target_boost
+            return
+        span = max(self._rover_boost_trigger_down - 1.0, 1e-6)
+        decay_s = max(self._boost_release_decay_s, 1e-3)
+        rate = span / decay_s
+        self._effective_boost = max(self._target_boost, self._effective_boost - rate * dt)
+
+    def _boosted_twist(self) -> Twist:
+        out = Twist()
+        out.linear.x = self._cached_twist.linear.x * self._effective_boost
+        out.angular.z = self._cached_twist.angular.z * self._effective_boost
+        return out
 
     def joy_callback(self, msg: Joy):
         if len(msg.buttons) < _JOY_MIN_BUTTONS or len(msg.axes) < _JOY_MIN_AXES:
@@ -154,15 +198,30 @@ class JoyMuxController(Node):
         if self._deadman_held:
             if self.current_mode == 0:
                 twist = Twist()
-                twist.linear.x = msg.axes[VKBAxesLayout.STICK_Y]
-                twist.angular.z = msg.axes[VKBAxesLayout.STICK_Z]
+                stick_y = float(msg.axes[VKBAxesLayout.STICK_Y])
+                stick_z = float(msg.axes[VKBAxesLayout.STICK_Z])
                 tank_turn = (1 if msg.buttons[VKBButtonLayout.A4_LEFT] else 0) - (1 if msg.buttons[VKBButtonLayout.A4_RIGHT] else 0)
+                a3_left = msg.buttons[VKBButtonLayout.A3_LEFT] == 1
+                a3_right = msg.buttons[VKBButtonLayout.A3_RIGHT] == 1
+
+                # Priority: A4 tank > A3 pivot > normal.
                 if tank_turn != 0:
+                    self._drive_mode = DriveMode.NORMAL
                     twist.linear.x = 0.0
                     twist.angular.z = float(tank_turn)
-                boost = self._rover_boost(msg.buttons)
-                twist.linear.x *= boost
-                twist.angular.z *= boost
+                elif a3_left or a3_right:
+                    self._drive_mode = (
+                        DriveMode.PIVOT_LEFT if a3_left else DriveMode.PIVOT_RIGHT
+                    )
+                    twist.linear.x = 0.0
+                    twist.angular.z = stick_z
+                else:
+                    self._drive_mode = DriveMode.NORMAL
+                    twist.linear.x = stick_y
+                    twist.angular.z = stick_z
+
+                # Boost is applied (and ramped on release) in _tick, not baked in.
+                self._target_boost = self._rover_boost(msg.buttons)
                 self._cached_twist = twist
             else:
                 joint_state = JointState()
@@ -205,6 +264,9 @@ class JoyMuxController(Node):
 
     def _tick(self):
         now_s = self.get_clock().now().nanoseconds * 1e-9
+        dt = max(0.0, now_s - self._last_tick_s)
+        self._last_tick_s = now_s
+        self._update_boost(dt)
         in_stop_burst = now_s < self._stop_burst_until
         in_mode_switch_stop = now_s < self._mode_switch_stop_until
 
@@ -226,7 +288,10 @@ class JoyMuxController(Node):
 
         if self.current_mode == 0:
             if self._cached_twist is not None:
-                self.rover_pub.publish(self._cached_twist)
+                self.rover_pub.publish(self._boosted_twist())
+                dm = UInt8()
+                dm.data = self._drive_mode
+                self.drive_mode_pub.publish(dm)
         else:
             if self._cached_joint is not None:
                 self.arm_pub.publish(self._cached_joint)

@@ -7,6 +7,9 @@
 
 
 #define COMMAND_PREFIX_MAINTAIN_VELOCITY 0x82052c80 
+// SPARK MAX current (torque) control setpoint, api class 4 index 3. The device
+// id occupies the low 6 bits; the float payload is amperes. arb 0x020514Cx.
+#define COMMAND_PREFIX_CURRENT_CONTROL 0x020514C0
 
 //This class takes care of all the system handlers, each motor has a handler function with switch cases depening on the instruction type 
 //being sent. 
@@ -21,6 +24,11 @@ class SystemFrameBuilder{
         void requestStatusFrame();
 
         uint32_t sendWheelMotorVelocity(DeviceId::ID device_id, float velocity_payload);
+
+        // Send a SPARK MAX current (torque) setpoint in amperes for one wheel
+        // motor. Used by WheelCanInterface's current control_mode. The caller
+        // is responsible for clamping to a safe magnitude.
+        uint32_t sendWheelMotorCurrent(DeviceId::ID device_id, float current_amps);
 
         //Function to send arm motor velocity to each motor
         void sendArmMotorVelocity(deviceType::DeviceType deviceT, 
