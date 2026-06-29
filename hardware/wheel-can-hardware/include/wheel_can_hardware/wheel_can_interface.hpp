@@ -125,6 +125,10 @@ private:
   static TractionMode parseTractionMode(const std::string & s);
   static ControlMode parseControlMode(const std::string & s);
 
+  void maybePrintTelemetry(const std::vector<float> & commanded_rpm,
+                           const std::vector<float> & target_rpm,
+                           const std::vector<float> & output_rpm);
+
   static std::string getParam(const hardware_interface::ComponentInfo & joint,
                               const std::string & key,
                               const std::string & fallback);
@@ -174,8 +178,9 @@ private:
   // Last computed motor RPM per wheel; used for diagnostics / debug logging.
   std::vector<float> last_motor_rpm_cmd_;
 
-  // Throttle for the optional per-wheel traction diagnostic log.
-  std::chrono::steady_clock::time_point last_diag_log_{};
+  bool log_telemetry_{false};
+  int print_period_ms_{1000};
+  std::chrono::steady_clock::time_point last_telemetry_log_{};
 
   rclcpp::Logger logger_{rclcpp::get_logger("wheel_can_interface")};
 };
