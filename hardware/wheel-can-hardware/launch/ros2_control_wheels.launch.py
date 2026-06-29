@@ -5,9 +5,8 @@ controller_manager logs forever::
 
     Waiting for data on 'robot_description' topic to finish initialization
 
-This launch ALWAYS starts the teleop chain — joy_node, joy_mux_controller,
-and skid_steer_mux — so the joystick drives the wheels through the
-velocity_controller out of the box. skid_steer_mux is the only publisher of
+Local teleop (joystick on the same machine) starts joy_node, joy_mux_controller,
+and skid_steer_mux by default. skid_steer_mux is the only publisher of
 /velocity_controller/commands here; do NOT also run wheel_bench_node on the
 same CAN interface (they are mutually exclusive wheel owners).
 
@@ -16,18 +15,27 @@ Usage::
     source install/setup.bash
     ros2 launch wheel_can_hardware ros2_control_wheels.launch.py can_interface:=can0
 
+Joystick on another PC (same ROS_DOMAIN_ID), wheels on the Jetson::
+
+    # PC: joy_node + joy_mux_controller (publishes /cmd_vel, /rover/drive_mode)
+    ros2 run joy joy_node
+    ros2 run joy_mux_controller_py joy_mux_controller
+
+    # Jetson: ros2_control + skid_steer_mux only (no duplicate joy nodes)
+    ros2 launch wheel_can_hardware ros2_control_wheels.launch.py \\
+        can_interface:=can0 launch_teleop:=false
+
+    # Bench / scripted control — disable skid_steer_mux so you own
+    # /velocity_controller/commands directly:
+    ros2 launch wheel_can_hardware ros2_control_wheels.launch.py \\
+        can_interface:=can0 launch_teleop:=false launch_skid_steer_mux:=false
+    ros2 topic pub /velocity_controller/commands std_msgs/msg/Float64MultiArray \\
+        "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
+
 With odometry node (needs /joint_states from joint_state_broadcaster)::
 
     ros2 launch wheel_can_hardware ros2_control_wheels.launch.py \\
         can_interface:=can0 launch_odometry:=true
-
-The teleop chain is on by default. To bring up only ros2_control (e.g. to
-publish /velocity_controller/commands manually), set launch_teleop:=false::
-
-    ros2 launch wheel_can_hardware ros2_control_wheels.launch.py \\
-        can_interface:=can0 launch_teleop:=false
-    ros2 topic pub /velocity_controller/commands std_msgs/msg/Float64MultiArray \\
-        "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
 
 Arm control lives in the arm / MoveIt launch (arm_hardware.launch.py with
 arm_can_hardware plugin). Safety stop/resume for wheels is can_safety_node,
@@ -84,7 +92,7 @@ def generate_launch_description():
     )
     multiplier_arg = DeclareLaunchArgument(
         'multiplier',
-        default_value='1250.0',
+        default_value='750.0',
         description='skid_steer_mux stick-to-motor-RPM gain.',
     )
     traction_mode_arg = DeclareLaunchArgument(
@@ -103,7 +111,16 @@ def generate_launch_description():
     launch_teleop_arg = DeclareLaunchArgument(
         'launch_teleop',
         default_value='true',
-        description='If true, start joy_node + joy_mux_controller + skid_steer_mux.',
+        description='If true, start joy_node + joy_mux_controller (and skid_steer_mux).',
+    )
+    launch_skid_steer_mux_arg = DeclareLaunchArgument(
+        'launch_skid_steer_mux',
+        default_value='true',
+        description=(
+            'If true, start skid_steer_mux (/cmd_vel -> /velocity_controller/commands). '
+            'Defaults on so launch_teleop:=false still drives wheels from a remote joy PC. '
+            'Set false for bench when you publish /velocity_controller/commands directly.'
+        ),
     )
     spawn_after_arg = DeclareLaunchArgument(
         'spawn_controller_delay',
@@ -112,6 +129,19 @@ def generate_launch_description():
             'Seconds after ros2_control_node starts before spawning controllers '
             '(hardware plugins + CAN need time before list_controllers exists).'
         ),
+    )
+    log_telemetry_arg = DeclareLaunchArgument(
+        'log_telemetry',
+        default_value='true',
+        description=(
+            'If true, WheelCanInterface prints a wheel_bench_node-style telemetry '
+            'table every print_period_ms.'
+        ),
+    )
+    print_period_arg = DeclareLaunchArgument(
+        'print_period_ms',
+        default_value='1000',
+        description='Telemetry table print interval in milliseconds.',
     )
 
     robot_description = ParameterValue(
@@ -125,6 +155,10 @@ def generate_launch_description():
                 LaunchConfiguration('traction_mode'),
                 ' control_mode:=',
                 LaunchConfiguration('control_mode'),
+                ' log_telemetry:=',
+                LaunchConfiguration('log_telemetry'),
+                ' print_period_ms:=',
+                LaunchConfiguration('print_period_ms'),
             ]
         ),
         value_type=str,
@@ -207,10 +241,21 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('launch_odometry')),
     )
 
-    # Teleop chain: joystick -> joy_mux_controller -> /cmd_vel + /rover/drive_mode
-    # -> skid_steer_mux -> /velocity_controller/commands. Always on unless
-    # launch_teleop:=false.
+    # Local joy: joystick -> joy_mux_controller -> /cmd_vel + /rover/drive_mode.
+    # skid_steer_mux subscribes to those topics (local or from another host) and
+    # publishes /velocity_controller/commands.
     teleop_condition = IfCondition(LaunchConfiguration('launch_teleop'))
+    skid_steer_condition = IfCondition(
+        PythonExpression(
+            [
+                "'",
+                LaunchConfiguration('launch_skid_steer_mux'),
+                "' == 'true' or '",
+                LaunchConfiguration('launch_teleop'),
+                "' == 'true'",
+            ]
+        )
+    )
 
     joy_node = Node(
         package='joy',
@@ -239,7 +284,7 @@ def generate_launch_description():
                 'multiplier': LaunchConfiguration('multiplier'),
             }
         ],
-        condition=teleop_condition,
+        condition=skid_steer_condition,
     )
 
     return LaunchDescription(
@@ -252,7 +297,10 @@ def generate_launch_description():
             traction_mode_arg,
             control_mode_arg,
             launch_teleop_arg,
+            launch_skid_steer_mux_arg,
             spawn_after_arg,
+            log_telemetry_arg,
+            print_period_arg,
             robot_state_publisher,
             delayed_control_node,
             delayed_spawners,

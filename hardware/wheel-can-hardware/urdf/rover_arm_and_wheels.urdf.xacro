@@ -65,10 +65,10 @@
   <xacro:wheel_link joint_name="wheel_left_rear"   link_name="wheel_left_rear_link"   xyz="-0.4  0.6 0"/>
 
   <!-- Arm ros2_control hardware block (ArmCanInterface). -->
-  <xacro:include filename="$(find rover_arm_moveit_config)/config/rover_arm.ros2_control.xacro"/>
-  <xacro:rover_arm_ros2_control
+  <xacro:include filename="$(find arm_can_hardware)/urdf/rover_arm_can.ros2_control.xacro"/>
+  <xacro:rover_arm_can_ros2_control
       name="RoverArm"
-      initial_positions_file="$(arg initial_positions_file)"/>
+      can_interface="$(arg can_interface)"/>
 
   <!-- Wheel ros2_control hardware block (WheelCanInterface). -->
   <xacro:include filename="$(find wheel_can_hardware)/urdf/rover_wheels.ros2_control.xacro"/>

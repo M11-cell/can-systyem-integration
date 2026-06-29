@@ -84,6 +84,9 @@ ament_target_dependencies(wheel_odometry_node ${ODOM_DEPENDENCIES})
 add_executable(wheel_bench_node
   src/wheel_bench_node.cpp
 )
+target_include_directories(wheel_bench_node PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
 ament_target_dependencies(wheel_bench_node rclcpp geometry_msgs can_util ros2_fmt_logger)
 
 add_executable(skid_steer_mux

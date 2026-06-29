@@ -21,7 +21,7 @@
   set gear_ratio="20.0" so feedback comes back in true wheel units.
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-  <xacro:macro name="rover_wheels_ros2_control" params="name:='RoverWheels' can_interface:='can0' traction_mode:='assist' control_mode:='velocity'">
+  <xacro:macro name="rover_wheels_ros2_control" params="name:='RoverWheels' can_interface:='can0' traction_mode:='assist' control_mode:='velocity' log_telemetry:='false' print_period_ms:='1000'">
     <!-- velocity mode -> velocity command interface; current mode -> effort. -->
     <xacro:property name="cmd_if" value="${'effort' if control_mode == 'current' else 'velocity'}"/>
     <ros2_control name="${name}" type="system">
@@ -52,6 +52,9 @@
         <param name="slip_kp">0.10</param>
         <param name="max_slip_correction">0.50</param>
         <param name="feedback_freshness_ms">100.0</param>
+        <!-- Periodic SPARK telemetry table (wheel_bench_node layout). -->
+        <param name="log_telemetry">${log_telemetry}</param>
+        <param name="print_period_ms">${print_period_ms}</param>
         <!-- stall guard: shared by traction motor-protect and current_pid -->
         <param name="stall_current_a">20.0</param>
         <param name="stall_relief_factor">0.50</param>

@@ -1,4 +1,5 @@
 #include "wheel_can_hardware/wheel_can_interface.hpp"
+#include "wheel_can_hardware/wheel_telemetry_format.hpp"
 
 #include "can-utils/can_connect.hpp"
 #include "can-utils/prefixes.hpp"
@@ -8,7 +9,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 
 namespace wheel_can_hardware
 {
@@ -89,6 +92,14 @@ hardware_interface::CallbackReturn WheelCanInterface::on_init(
   try { traction_low_load_a_           = std::stof(getParam(hp, "traction_low_load_a",           "2.0"));  } catch (...) {}
   try { traction_weight_k_             = std::stof(getParam(hp, "traction_weight_k",             "0.5"));  } catch (...) {}
 
+  log_telemetry_ = (getParam(hp, "log_telemetry", "false") == "true");
+  try {
+    print_period_ms_ = std::stoi(getParam(hp, "print_period_ms", "1000"));
+  } catch (...) {
+    print_period_ms_ = 1000;
+  }
+  print_period_ms_ = std::max(100, print_period_ms_);
+
   if (info_.joints.empty()) {
     RCLCPP_FATAL(logger_, "No wheel joints declared in <ros2_control>");
     return hardware_interface::CallbackReturn::ERROR;
@@ -151,10 +162,15 @@ hardware_interface::CallbackReturn WheelCanInterface::on_init(
     /*AGGRESSIVE*/                                 "aggressive";
   const char * control_str =
     (control_mode_ == ControlMode::CURRENT) ? "current" : "velocity";
+  std::string telemetry_suffix;
+  if (log_telemetry_) {
+    telemetry_suffix = ", telemetry=" + std::to_string(print_period_ms_) + "ms";
+  }
   RCLCPP_INFO(logger_,
-              "Initialised WheelCanInterface with %zu wheels on CAN '%s' "
-              "(control_mode=%s, traction_mode=%s, anti_slip_mode=%s)",
-              wheels_.size(), can_interface_name_.c_str(), control_str, traction_str, mode_str);
+              "WheelCanInterface ready — iface=%s, wheels=%zu, control=%s, "
+              "traction=%s, anti_slip=%s%s",
+              can_interface_name_.c_str(), wheels_.size(), control_str, traction_str, mode_str,
+              telemetry_suffix.c_str());
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -304,6 +320,7 @@ hardware_interface::return_type WheelCanInterface::write(const rclcpp::Time & /*
       frame_builder_->sendWheelMotorCurrent(did, amps);
     }
     frame_builder_->startMotors(heartbeat_motor_mask_);
+    maybePrintTelemetry({}, {}, last_motor_rpm_cmd_);
     return hardware_interface::return_type::OK;
   }
 
@@ -343,21 +360,8 @@ hardware_interface::return_type WheelCanInterface::write(const rclcpp::Time & /*
     frame_builder_->sendWheelMotorVelocity(did, output_rpm[i]);
   }
 
-  // Optional throttled diagnostic when traction is active: log the
-  // commanded / target / output / measured RPM per wheel once a second.
-  if (traction_mode_ != TractionMode::OFF) {
-    const auto now = std::chrono::steady_clock::now();
-    if (now - last_diag_log_ >= std::chrono::seconds(1)) {
-      last_diag_log_ = now;
-      for (size_t i = 0; i < n; ++i) {
-        RCLCPP_INFO(logger_,
-                    "[traction] %s cmd=%.0f tgt=%.0f out=%.0f meas=%.0f I=%.1fA%s",
-                    wheels_[i].name.c_str(), commanded_rpm[i], target_rpm[i],
-                    output_rpm[i], measured_rpm[i], current_a[i],
-                    fresh[i] ? "" : " (stale)");
-      }
-    }
-  }
+  // Optional throttled telemetry table (same layout as wheel_bench_node).
+  maybePrintTelemetry(commanded_rpm, target_rpm, output_rpm);
 
   // Re-issue the SPARK MAX heartbeat / start-motors frame on every cycle, as
   // the legacy can_controller_node did. Without this the SPARKs latch into a
@@ -519,6 +523,55 @@ float WheelCanInterface::applyAntiSlip(AntiSlipMode mode,
   }
 
   return target_rpm;
+}
+
+void WheelCanInterface::maybePrintTelemetry(const std::vector<float> & commanded_rpm,
+                                            const std::vector<float> & target_rpm,
+                                            const std::vector<float> & output_rpm)
+{
+  if (!log_telemetry_ || !feedback_) {
+    return;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  if (now - last_telemetry_log_ < std::chrono::milliseconds(print_period_ms_)) {
+    return;
+  }
+  last_telemetry_log_ = now;
+
+  const auto fresh_window = std::chrono::milliseconds(static_cast<int>(feedback_freshness_ms_));
+  const bool show_traction = (traction_mode_ != TractionMode::OFF) && !commanded_rpm.empty();
+
+  std::ostringstream ss;
+  ss << "\n--- Wheel CAN (iface=" << can_interface_name_ << ") ---";
+
+  spark_max::WheelFeedback fb{};
+  for (size_t i = 0; i < wheels_.size(); ++i) {
+    const uint8_t device_id = wheels_[i].device_id;
+    const char * label = telemetry::labelForDevice(device_id);
+
+    if (!feedback_->getFeedback(device_id, fb)) {
+      ss << "\n  " << std::left << std::setw(12) << label << "  [NOT WATCHED]";
+      continue;
+    }
+
+    const float out = (i < output_rpm.size()) ? output_rpm[i] : 0.0f;
+    const float ctrl = (i < commanded_rpm.size()) ? commanded_rpm[i] : out;
+    const float tgt = (i < target_rpm.size()) ? target_rpm[i] : out;
+
+    ss << "\n" << telemetry::formatRos2ControlRow(
+      label,
+      feedback_->isVitFresh(device_id, fresh_window),
+      feedback_->hasVitTelemetry(device_id),
+      feedback_->isStatus0Fresh(device_id, fresh_window),
+      feedback_->isStatus2Fresh(device_id, fresh_window),
+      fb.status2_seen,
+      ctrl, tgt, out,
+      show_traction,
+      fb);
+  }
+
+  RCLCPP_INFO(logger_, "%s", ss.str().c_str());
 }
 
 std::vector<hardware_interface::StateInterface> WheelCanInterface::export_state_interfaces()

@@ -32,6 +32,7 @@
 #include "can-utils/prefixes.hpp"
 #include "can-utils/spark_max_feedback.hpp"
 #include "can-utils/system_controller.hpp"
+#include "wheel_can_hardware/wheel_telemetry_format.hpp"
 
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -50,19 +51,6 @@ namespace
 {
 
 constexpr uint32_t kSparkPrefix = 0x0205u;
-
-const char * labelForDevice(uint8_t device_id)
-{
-  switch (device_id) {
-    case 1: return "Mot1 (RF)";
-    case 2: return "Mot2 (RM)";
-    case 3: return "Mot3 (RR)";
-    case 4: return "Mot4 (LF)";
-    case 5: return "Mot5 (LM)";
-    case 6: return "Mot6 (LR)";
-    default: return "Mot?";
-  }
-}
 
 std::vector<uint8_t> defaultDeviceIds()
 {
@@ -84,52 +72,6 @@ static constexpr std::array<DeviceId::ID, 6> kWheelIds = {
   DeviceId::ID::WHEEL_MOT5,
   DeviceId::ID::WHEEL_MOT6,
 };
-
-std::string formatRow(const char * label,
-                      bool vit_fresh,
-                      bool vit_ever,
-                      bool status0_fresh,
-                      bool status2_fresh,
-                      bool status2_ever,
-                      float cmd_rpm,
-                      const spark_max::WheelFeedback & fb)
-{
-  std::ostringstream ss;
-  ss << "  " << std::left << std::setw(12) << label
-     << " cmd=" << std::fixed << std::setprecision(1) << std::setw(8) << cmd_rpm << "rpm";
-
-  if (!status2_ever) {
-    ss << "  meas=[NO STATUS_2]";
-  } else {
-    ss << " meas=" << std::fixed << std::setprecision(2) << std::setw(8) << fb.velocity_rpm << "rpm"
-       << " pos=" << std::fixed << std::setprecision(3) << std::setw(9) << fb.position_rot << "rot";
-  }
-
-  if (!vit_ever) {
-    ss << "  V/I/T=[NO VIT]";
-  } else {
-    ss << " V=" << std::fixed << std::setprecision(2) << std::setw(6) << fb.bus_voltage_v
-       << " I=" << std::fixed << std::setprecision(2) << std::setw(6) << fb.current_a
-       << " T=" << std::fixed << std::setprecision(1) << std::setw(5) << fb.motor_temperature_c;
-    if (!status0_fresh && fb.legacy_vit_seen) {
-      ss << " (legacy)";
-    }
-  }
-
-  if (!status2_ever && !vit_ever) {
-    ss << "  [NO TELEM]";
-  } else if ((!status2_ever || !status2_fresh) && (!vit_ever || !vit_fresh)) {
-    ss << "  [STALE]";
-  } else if (!status2_ever || !status2_fresh) {
-    ss << "  [status2 stale]";
-  } else if (!vit_ever || !vit_fresh) {
-    ss << "  [vit stale]";
-  } else {
-    ss << "  [ok]";
-  }
-
-  return ss.str();
-}
 
 }  // namespace
 
@@ -318,7 +260,8 @@ private:
       const uint8_t device_id = device_ids_[i];
       spark_max::WheelFeedback fb{};
       if (!feedback_->getFeedback(device_id, fb)) {
-        ss << "\n  " << std::left << std::setw(12) << labelForDevice(device_id)
+        ss << "\n  " << std::left << std::setw(12)
+           << wheel_can_hardware::telemetry::labelForDevice(device_id)
            << "  [NOT WATCHED]";
         continue;
       }
@@ -326,8 +269,8 @@ private:
       const float cmd = (device_id >= 1 && device_id <= 6)
         ? last_cmd_rpm_[device_id - 1] : 0.0f;
 
-      ss << "\n" << formatRow(
-        labelForDevice(device_id),
+      ss << "\n" << wheel_can_hardware::telemetry::formatRow(
+        wheel_can_hardware::telemetry::labelForDevice(device_id),
         feedback_->isVitFresh(device_id, stale_ms_),
         feedback_->hasVitTelemetry(device_id),
         feedback_->isStatus0Fresh(device_id, stale_ms_),

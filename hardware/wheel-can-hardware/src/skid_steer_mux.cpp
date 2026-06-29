@@ -55,7 +55,7 @@ public:
   : Node("skid_steer_mux")
   {
     track_width_   = declare_parameter<double>("track_width", 0.591);
-    multiplier_    = declare_parameter<double>("multiplier", 1250.0);
+    multiplier_    = declare_parameter<double>("multiplier", 750.0);
     deadzone_      = declare_parameter<double>("deadzone", 0.05);
     pure_axis_eps_ = declare_parameter<double>("pure_axis_eps", 1e-5);
     publish_rate_  = declare_parameter<double>("publish_rate", 100.0);
@@ -189,7 +189,7 @@ private:
   }
 
   double track_width_{0.591};
-  double multiplier_{1250.0};
+  double multiplier_{750.0};
   double deadzone_{0.05};
   double pure_axis_eps_{1e-5};
   double publish_rate_{100.0};
