@@ -9,14 +9,16 @@
     <!--JOINTS: When a joint is specified, the child link of that joint (which will always exist) is automatically included-->
     <!--CHAINS: When a chain is specified, all the links along the chain (including endpoints) are included in the group. Additionally, all the joints that are parents to included links are also included. This means that joints along the chain and the parent joint of the base link are included in the group-->
     <!--SUBGROUPS: Groups can also be formed by referencing to already defined group names-->
+    <!-- joint7 (clamp servo) omitted from IK/planning for now; still commandable via
+         hardware / teleop. Re-add when gripper is part of the planning group. -->
     <group name="arm">
         <joint name="virtual_joint"/>
         <joint name="joint1"/>
         <joint name="joint2"/>
         <joint name="joint3"/>
+        <joint name="joint4"/>
         <joint name="joint5"/>
         <joint name="joint6"/>
-        <joint name="joint7"/>
     </group>
     <group name="gripper">
         <link name="gripper_claw_link"/>
@@ -28,7 +30,9 @@
         <joint name="joint1" value="0"/>
         <joint name="joint2" value="0"/>
         <joint name="joint3" value="0"/>
+        <joint name="joint4" value="0"/>
         <joint name="joint5" value="0"/>
+        <joint name="joint6" value="0"/>
     </group_state>
     <!--END EFFECTOR: Purpose: Represent information about an end effector.-->
     <end_effector name="hand" parent_link="gripper_base_link" group="gripper" parent_group="arm"/>

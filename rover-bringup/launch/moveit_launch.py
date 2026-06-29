@@ -11,9 +11,16 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 
 def generate_launch_description():
+    # The arm now runs on CAN via ArmCanInterface. The xacro defaults to
+    # hardware_backend:=can on can0; override the CAN interface here if needed
+    # (MoveItConfigsBuilder evaluates xacro at construction time, so this takes
+    # a concrete string rather than a launch argument).
     moveit_config = (
         MoveItConfigsBuilder("rover_arm")
-        .robot_description(file_path="config/rover_arm.urdf.xacro")
+        .robot_description(
+            file_path="config/rover_arm.urdf.xacro",
+            mappings={"hardware_backend": "can", "can_interface": "can0"},
+        )
         .joint_limits(file_path="config/joint_limits.yaml")
         .to_moveit_configs()
     )

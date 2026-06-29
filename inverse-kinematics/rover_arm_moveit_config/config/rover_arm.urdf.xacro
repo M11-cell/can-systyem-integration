@@ -1,14 +1,28 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="rover_arm">
     <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+    <xacro:arg name="can_interface" default="can0" />
+    <!-- hardware_backend: "can" (default, ArmCanInterface over CAN),
+         "fake" (mock_components for MoveIt planning demos), or
+         "serial" (legacy arm_interface/ArmInterface on /dev/ttyUSB0 + /dev/ttyTHS1). -->
+    <xacro:arg name="hardware_backend" default="can" />
 
     <!-- Import rover_arm urdf file -->
     <xacro:include filename="$(find rover_arm_description)/urdf/arm.urdf.xacro" />
 
-    <!-- Import control_xacro -->
-    <xacro:include filename="rover_arm.ros2_control.xacro" />
+    <xacro:property name="hardware_backend" value="$(arg hardware_backend)" />
 
-
-    <xacro:rover_arm_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+    <xacro:if value="${hardware_backend == 'can'}">
+        <xacro:include filename="$(find arm_can_hardware)/urdf/rover_arm_can.ros2_control.xacro" />
+        <xacro:rover_arm_can_ros2_control name="RoverArm" can_interface="$(arg can_interface)" />
+    </xacro:if>
+    <xacro:if value="${hardware_backend == 'fake'}">
+        <xacro:include filename="rover_arm_fake.ros2_control.xacro" />
+        <xacro:rover_arm_fake_ros2_control name="FakeRoverArm" initial_positions_file="$(arg initial_positions_file)" />
+    </xacro:if>
+    <xacro:if value="${hardware_backend == 'serial'}">
+        <xacro:include filename="rover_arm_serial.ros2_control.xacro" />
+        <xacro:rover_arm_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)" />
+    </xacro:if>
 
 </robot>

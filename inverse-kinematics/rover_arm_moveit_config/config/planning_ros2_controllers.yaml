@@ -1,11 +1,10 @@
-# This config file is used by ros2_control
+# ros2_control config for moveit_planning.launch.py simulated execution (no hardware).
 controller_manager:
   ros__parameters:
     update_rate: 100  # Hz
 
     arm_controller:
-      type: forward_command_controller/ForwardCommandController
-
+      type: joint_trajectory_controller/JointTrajectoryController
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -19,10 +18,8 @@ arm_controller:
       - joint4
       - joint5
       - joint6
-      - joint7
-    interface_name: velocity
-    # command_interfaces:
-    #   - velocity
-    # state_interfaces:
-    #   - position
-    #   - velocity
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity

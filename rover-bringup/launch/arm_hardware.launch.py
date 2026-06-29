@@ -2,21 +2,38 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.actions import RegisterEventHandler
 from launch.actions import TimerAction
 from launch.event_handlers import OnProcessStart
-from launch.substitutions import Command
+from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    urdf_path = os.path.join(get_package_share_directory('rover_arm_description'), 'urdf', 'arm.urdf.xacro')
+    can_interface_arg = DeclareLaunchArgument(
+        'can_interface',
+        default_value='can0',
+        description='SocketCAN interface passed into ArmCanInterface URDF.',
+    )
 
-    robot_description = ParameterValue(Command(['xacro ', urdf_path]), value_type=str)
+    # Arm description with the CAN ros2_control block (ArmCanInterface). The
+    # xacro defaults to hardware_backend:=can; pass the CAN interface through.
+    urdf_path = os.path.join(
+        get_package_share_directory('rover_arm_moveit_config'), 'config', 'rover_arm.urdf.xacro'
+    )
+
+    robot_description = ParameterValue(
+        Command([
+            'xacro ', urdf_path,
+            ' can_interface:=', LaunchConfiguration('can_interface'),
+        ]),
+        value_type=str,
+    )
 
     controller_config = os.path.join(
-        get_package_share_directory('rover_arm_bringup'), 'config', 'ros2_controllers.yaml'
+        get_package_share_directory('rover_arm_moveit_config'), 'config', 'ros2_controllers.yaml'
     )
 
     rsp_launch = Node(
@@ -76,7 +93,7 @@ def generate_launch_description():
     # )
 
     return LaunchDescription([
-
+        can_interface_arg,
         rsp_launch,
         delayed_controller_manager,
         delayed_spawners,
