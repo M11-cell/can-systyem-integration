@@ -75,6 +75,14 @@ class JoyMuxController(Node):
         self._deadman_held = False
         self._prev_deadman = False
 
+        # Pivot is press-to-toggle: pressing A3_LEFT/A3_RIGHT latches PIVOT_LEFT/
+        # PIVOT_RIGHT, pressing the same side again returns to NORMAL. Edge state
+        # and a cooldown debounce mirror the A2 Rover/Arm toggle above.
+        self._latched_pivot = DriveMode.NORMAL
+        self._prev_a3_left = 0
+        self._prev_a3_right = 0
+        self._last_pivot_toggle_at_s = -1e9
+
         # _cached_twist holds the UNBOOSTED stick twist; the boost factor is
         # applied (with ramp-down) in _tick so release decays smoothly.
         self._cached_twist: Twist | None = None
@@ -188,10 +196,36 @@ class JoyMuxController(Node):
             self._cached_joint = None
             self._m4_latched_cmd = 0.0
             self._m4_hold_until = 0.0
+            self._latched_pivot = DriveMode.NORMAL
             self._mode_switch_stop_until = now_s + self._mode_switch_stop_duration_s
             self._publish_all_stop()
             self.get_logger().info(f"Switched to {'Arm' if self.current_mode else 'Rover'} mode")
         self.last_toggle = 1 if home_down else 0
+
+        # A3 pivot is press-to-toggle (rover only). A3 doubles as arm joint5 in
+        # arm mode, so only update the latch when driving the rover.
+        a3_left_btn = msg.buttons[VKBButtonLayout.A3_LEFT] == 1
+        a3_right_btn = msg.buttons[VKBButtonLayout.A3_RIGHT] == 1
+        if self.current_mode == 0:
+            cooldown_ok = (
+                now_s - self._last_pivot_toggle_at_s
+            ) >= self._mode_toggle_cooldown_s
+            if a3_left_btn and self._prev_a3_left == 0 and cooldown_ok:
+                self._latched_pivot = (
+                    DriveMode.NORMAL
+                    if self._latched_pivot == DriveMode.PIVOT_LEFT
+                    else DriveMode.PIVOT_LEFT
+                )
+                self._last_pivot_toggle_at_s = now_s
+            elif a3_right_btn and self._prev_a3_right == 0 and cooldown_ok:
+                self._latched_pivot = (
+                    DriveMode.NORMAL
+                    if self._latched_pivot == DriveMode.PIVOT_RIGHT
+                    else DriveMode.PIVOT_RIGHT
+                )
+                self._last_pivot_toggle_at_s = now_s
+        self._prev_a3_left = 1 if a3_left_btn else 0
+        self._prev_a3_right = 1 if a3_right_btn else 0
 
         self._deadman_held = msg.buttons[VKBButtonLayout.D1] == 1
 
@@ -201,18 +235,14 @@ class JoyMuxController(Node):
                 stick_y = float(msg.axes[VKBAxesLayout.STICK_Y])
                 stick_z = float(msg.axes[VKBAxesLayout.STICK_Z])
                 tank_turn = (1 if msg.buttons[VKBButtonLayout.A4_LEFT] else 0) - (1 if msg.buttons[VKBButtonLayout.A4_RIGHT] else 0)
-                a3_left = msg.buttons[VKBButtonLayout.A3_LEFT] == 1
-                a3_right = msg.buttons[VKBButtonLayout.A3_RIGHT] == 1
 
-                # Priority: A4 tank > A3 pivot > normal.
+                # Priority: A4 tank (hold) > latched pivot > normal.
                 if tank_turn != 0:
                     self._drive_mode = DriveMode.NORMAL
                     twist.linear.x = 0.0
                     twist.angular.z = float(tank_turn)
-                elif a3_left or a3_right:
-                    self._drive_mode = (
-                        DriveMode.PIVOT_LEFT if a3_left else DriveMode.PIVOT_RIGHT
-                    )
+                elif self._latched_pivot != DriveMode.NORMAL:
+                    self._drive_mode = self._latched_pivot
                     twist.linear.x = 0.0
                     twist.angular.z = stick_z
                 else:
@@ -258,6 +288,8 @@ class JoyMuxController(Node):
                 self.get_clock().now().nanoseconds * 1e-9
                 + self._stop_burst_duration_s
             )
+            self._latched_pivot = DriveMode.NORMAL
+            self._drive_mode = DriveMode.NORMAL
             self._publish_all_stop()
 
         self._prev_deadman = self._deadman_held
