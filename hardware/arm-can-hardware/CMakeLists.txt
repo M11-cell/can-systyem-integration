@@ -15,6 +15,7 @@ set(DEPENDENCIES
   hardware_interface
   pluginlib
   can_util
+  encoder_boards
   ros2_fmt_logger
 )
 

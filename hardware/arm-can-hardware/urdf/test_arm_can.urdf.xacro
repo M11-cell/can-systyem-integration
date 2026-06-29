@@ -33,7 +33,10 @@
   <xacro:bench_joint joint_name="joint1" link_name="link1" xyz="0 0 0.1"/>
   <xacro:bench_joint joint_name="joint2" link_name="link2" xyz="0 0 0.2"/>
   <xacro:bench_joint joint_name="joint3" link_name="link3" xyz="0 0 0.3"/>
+  <xacro:bench_joint joint_name="joint4" link_name="link4" xyz="0 0 0.35"/>
   <xacro:bench_joint joint_name="joint5" link_name="link5" xyz="0 0 0.4"/>
+  <xacro:bench_joint joint_name="joint6" link_name="link6" xyz="0 0 0.45"/>
+  <xacro:bench_joint joint_name="joint7" link_name="link7" xyz="0 0 0.5"/>
 
   <xacro:include filename="$(find arm_can_hardware)/urdf/rover_arm_can.ros2_control.xacro"/>
   <xacro:rover_arm_can_ros2_control name="RoverArm" can_interface="$(arg can_interface)"/>

@@ -14,8 +14,9 @@ namespace
 constexpr double kCountsToRad = M_PI / 16384.0;
 }  // namespace
 
-// Default channel table — questions.md §A, matched to rover_arm.ros2_control.xacro.
-// joint4 / FOREARM_ENCODER (0x0A) omitted: no firmware exists in this repo.
+// Default channel table — questions.md §A, matched to rover_arm_can.ros2_control.xacro.
+// joint4 / FOREARM_ENCODER (0x0A) omitted: firmware not installed yet.
+// Wrist encoder (joint5 / M5) is the fourth channel below.
 std::vector<EncoderChannel> ArmEncoderFeedback::defaultChannels()
 {
   return {

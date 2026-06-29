@@ -13,6 +13,7 @@
 #include "can-utils/can_interface.hpp"
 #include "can-utils/prefixes.hpp"
 #include "can-utils/system_controller.hpp"
+#include "encoder-boards/arm_encoder_feedback.hpp"
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_component_interface_params.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
@@ -20,10 +21,9 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
+#include <chrono>
 #include <memory>
-#include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace arm_can_hardware
@@ -68,14 +68,21 @@ struct JointConfig
   uint32_t encoder_abs_can_id{0};    // absolute position frame
   uint32_t encoder_speed_can_id{0};  // angular velocity frame
 
+  // Calibration applied to the raw encoder reading in read():
+  //   joint_position = direction * position_scale * raw_rad + position_offset_rad
+  //   joint_velocity = direction * position_scale * raw_rad_s
+  // Defaults are identity; real values come from bench calibration once the
+  // encoder boards are installed (docs/testing/08-test-arm-encoders.md).
+  double position_scale{1.0};
+  double position_offset_rad{0.0};
+
+  // Index into ArmCanInterface::encoder_feedback_ when has_encoder is true.
+  bool has_encoder{false};
+  size_t channel_index{0};
+
   // SERVO fields
   ServoMode servo_mode{ServoMode::POSITION};
   float servo_max{1.5707963f};
-
-  // Latest feedback (radians and rad/s for arm motors). Protected by the
-  // ArmCanInterface::feedback_mutex_.
-  double position{std::numeric_limits<double>::quiet_NaN()};
-  double velocity{std::numeric_limits<double>::quiet_NaN()};
 };
 
 class ArmCanInterface : public hardware_interface::SystemInterface
@@ -96,11 +103,6 @@ public:
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
 
 private:
-  // CAN frame callback. Currently decodes encoder feedback frames assumed to
-  // carry a float32 LE radians payload in bytes 0-3 (and optional float32 LE
-  // rad/s in bytes 4-7). Update once the encoder firmware payload is locked.
-  void onCanFrame(uint32_t id, const std::vector<uint8_t> & data);
-
   static JointKind parseKind(const std::string & s);
   static ServoMode parseServoMode(const std::string & s);
   // Parse an instruction byte from a hex/dec string in the URDF param.
@@ -114,25 +116,30 @@ private:
 
   std::string can_interface_name_{"can0"};
   bool send_heartbeat_on_activate_{true};
+  // Encoder feedback older than this is treated as stale (position/velocity
+  // reported as NaN). Encoder boards transmit at ~2 Hz, so the default is
+  // generous. Override with <param name="feedback_freshness_ms"> in the URDF.
+  float feedback_freshness_ms_{500.0f};
 
   std::shared_ptr<can_util::CANController> can_controller_;
   std::unique_ptr<SystemFrameBuilder> frame_builder_;
-  std::shared_ptr<can_util::CANFrameCallback> frame_callback_;
+
+  // Decodes the arm encoder CAN frames and stores the latest value per channel.
+  // Owns its own frame callback on the shared CANController. Built in
+  // on_configure() from encoder_channels_ populated during on_init().
+  std::unique_ptr<encoder_boards::ArmEncoderFeedback> encoder_feedback_;
+  std::vector<encoder_boards::EncoderChannel> encoder_channels_;
 
   // Indexed parallel to info_.joints / hw_*_ vectors.
   std::vector<JointConfig> joints_;
-  // Maps masked 29-bit CAN arbitration ID -> joint index.
-  std::unordered_map<uint32_t, size_t> abs_can_id_to_joint_;
-  std::unordered_map<uint32_t, size_t> speed_can_id_to_joint_;
 
   // ros2_control state buffers (one entry per URDF joint).
   std::vector<double> hw_states_position_;
   std::vector<double> hw_states_velocity_;
   std::vector<double> hw_commands_velocity_;
 
-  mutable std::mutex feedback_mutex_;
-
   rclcpp::Logger logger_{rclcpp::get_logger("arm_can_interface")};
+  rclcpp::Clock clock_{RCL_STEADY_TIME};
 };
 
 }  // namespace arm_can_hardware
