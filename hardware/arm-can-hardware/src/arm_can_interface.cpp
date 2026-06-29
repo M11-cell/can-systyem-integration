@@ -7,8 +7,8 @@
 #include "pluginlib/class_list_macros.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
-#include <cstring>
 #include <limits>
 #include <stdexcept>
 
@@ -79,6 +79,14 @@ hardware_interface::CallbackReturn ArmCanInterface::on_init(
   if (hw_iter != info_.hardware_parameters.end()) {
     send_heartbeat_on_activate_ = (hw_iter->second == "true" || hw_iter->second == "1");
   }
+  hw_iter = info_.hardware_parameters.find("feedback_freshness_ms");
+  if (hw_iter != info_.hardware_parameters.end()) {
+    try {
+      feedback_freshness_ms_ = std::stof(hw_iter->second);
+    } catch (const std::exception &) {
+      // keep default
+    }
+  }
 
   if (info_.joints.empty()) {
     RCLCPP_FATAL(logger_, "No joints defined in <ros2_control> hardware info");
@@ -111,6 +119,16 @@ hardware_interface::CallbackReturn ArmCanInterface::on_init(
           cfg.direction = std::stof(getParam(joint, "direction", "1.0"));
         } catch (const std::exception &) {
           cfg.direction = 1.0f;
+        }
+        try {
+          cfg.position_scale = std::stod(getParam(joint, "position_scale", "1.0"));
+        } catch (const std::exception &) {
+          cfg.position_scale = 1.0;
+        }
+        try {
+          cfg.position_offset_rad = std::stod(getParam(joint, "position_offset_rad", "0.0"));
+        } catch (const std::exception &) {
+          cfg.position_offset_rad = 0.0;
         }
 
         // Derive default encoder TX IDs from device_id if not explicitly provided.
@@ -178,27 +196,33 @@ hardware_interface::CallbackReturn ArmCanInterface::on_init(
   hw_states_position_.assign(n, std::numeric_limits<double>::quiet_NaN());
   hw_states_velocity_.assign(n, std::numeric_limits<double>::quiet_NaN());
 
-  // Build O(1) lookup tables from full 29-bit encoder TX IDs -> joint index.
-  abs_can_id_to_joint_.clear();
-  speed_can_id_to_joint_.clear();
+  // Build the encoder channel table for ArmEncoderFeedback. Only arm motors
+  // with a configured absolute-position CAN ID get a channel; joints without an
+  // encoder (or whose board is not yet installed) stay open loop. The decoder
+  // stores raw radians; sign/scale/offset are applied here in read().
+  encoder_channels_.clear();
   for (size_t i = 0; i < joints_.size(); ++i) {
-    if (joints_[i].kind != JointKind::ARM_MOTOR) {
+    JointConfig & cfg = joints_[i];
+    if (cfg.kind != JointKind::ARM_MOTOR || cfg.encoder_abs_can_id == 0) {
       continue;
     }
-    if (joints_[i].encoder_abs_can_id != 0) {
-      abs_can_id_to_joint_[joints_[i].encoder_abs_can_id] = i;
-      RCLCPP_DEBUG(logger_, "Joint '%s': encoder abs ID 0x%08X, speed ID 0x%08X",
-                   joints_[i].name.c_str(),
-                   joints_[i].encoder_abs_can_id,
-                   joints_[i].encoder_speed_can_id);
-    }
-    if (joints_[i].encoder_speed_can_id != 0) {
-      speed_can_id_to_joint_[joints_[i].encoder_speed_can_id] = i;
-    }
+    encoder_boards::EncoderChannel ch;
+    ch.label        = cfg.name;
+    ch.abs_can_id   = cfg.encoder_abs_can_id;
+    ch.speed_can_id = (cfg.encoder_speed_can_id != 0)
+                        ? cfg.encoder_speed_can_id
+                        : (cfg.encoder_abs_can_id + 0x40u);
+    ch.direction    = cfg.direction;  // informational; applied in read()
+    cfg.has_encoder   = true;
+    cfg.channel_index = encoder_channels_.size();
+    encoder_channels_.push_back(ch);
+    RCLCPP_DEBUG(logger_, "Joint '%s': encoder abs ID 0x%08X, speed ID 0x%08X",
+                 cfg.name.c_str(), ch.abs_can_id, ch.speed_can_id);
   }
 
-  RCLCPP_INFO(logger_, "Initialised ArmCanInterface with %zu joints on CAN '%s'",
-              joints_.size(), can_interface_name_.c_str());
+  RCLCPP_INFO(logger_,
+              "Initialised ArmCanInterface with %zu joints (%zu with encoders) on CAN '%s'",
+              joints_.size(), encoder_channels_.size(), can_interface_name_.c_str());
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -212,8 +236,12 @@ hardware_interface::CallbackReturn ArmCanInterface::on_configure(const rclcpp_li
     }
     frame_builder_ = std::make_unique<SystemFrameBuilder>(can_controller_);
 
-    frame_callback_ = can_controller_->registerFrameCallback(
-      [this](uint32_t id, const std::vector<uint8_t> & data) { onCanFrame(id, data); });
+    // ArmEncoderFeedback registers its own frame callback on the shared
+    // controller and decodes the abs/speed frames for every configured channel.
+    if (!encoder_channels_.empty()) {
+      encoder_feedback_ = std::make_unique<encoder_boards::ArmEncoderFeedback>(
+        can_controller_, encoder_channels_);
+    }
 
     RCLCPP_INFO(logger_, "Configured ArmCanInterface on CAN '%s'", can_interface_name_.c_str());
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -222,7 +250,7 @@ hardware_interface::CallbackReturn ArmCanInterface::on_configure(const rclcpp_li
       logger_, "Exception during ArmCanInterface configure on '%s': %s",
       can_interface_name_.c_str(), e.what());
     can_util::logCanSetupRecoveryHints(logger_, can_interface_name_);
-    frame_callback_.reset();
+    encoder_feedback_.reset();
     frame_builder_.reset();
     can_controller_.reset();
     return hardware_interface::CallbackReturn::ERROR;
@@ -231,7 +259,7 @@ hardware_interface::CallbackReturn ArmCanInterface::on_configure(const rclcpp_li
       logger_, "Unknown exception during ArmCanInterface configure on '%s'",
       can_interface_name_.c_str());
     can_util::logCanSetupRecoveryHints(logger_, can_interface_name_);
-    frame_callback_.reset();
+    encoder_feedback_.reset();
     frame_builder_.reset();
     can_controller_.reset();
     return hardware_interface::CallbackReturn::ERROR;
@@ -274,18 +302,50 @@ hardware_interface::CallbackReturn ArmCanInterface::on_deactivate(const rclcpp_l
 
 hardware_interface::return_type ArmCanInterface::read(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
-  // Snapshot the latest encoder feedback gathered by onCanFrame() into the
-  // ros2_control state buffers.
-  std::lock_guard<std::mutex> lk(feedback_mutex_);
+  // Snapshot the latest encoder feedback decoded by ArmEncoderFeedback into the
+  // ros2_control state buffers, applying per-joint calibration exactly once.
+  const auto fresh_window =
+    std::chrono::milliseconds(static_cast<int>(feedback_freshness_ms_));
+
   for (size_t i = 0; i < joints_.size(); ++i) {
-    if (joints_[i].kind == JointKind::ARM_MOTOR) {
-      hw_states_position_[i] = joints_[i].position * joints_[i].direction;
-      hw_states_velocity_[i] = joints_[i].velocity * joints_[i].direction;
-    } else {
+    JointConfig & cfg = joints_[i];
+
+    if (cfg.kind != JointKind::ARM_MOTOR) {
       // Servos do not provide position feedback over CAN today; mirror the
       // commanded value so the controller has something coherent to read.
       hw_states_position_[i] = std::isnan(hw_states_position_[i]) ? 0.0 : hw_states_position_[i];
       hw_states_velocity_[i] = hw_commands_velocity_[i];
+      continue;
+    }
+
+    // No encoder configured (board not installed yet): stay open loop. The
+    // motor still accepts velocity commands; feedback is simply unavailable.
+    if (!cfg.has_encoder || !encoder_feedback_) {
+      hw_states_position_[i] = std::numeric_limits<double>::quiet_NaN();
+      hw_states_velocity_[i] = std::numeric_limits<double>::quiet_NaN();
+      continue;
+    }
+
+    const size_t ch = cfg.channel_index;
+    const double dir_scale = static_cast<double>(cfg.direction) * cfg.position_scale;
+
+    if (encoder_feedback_->absFresh(ch, fresh_window)) {
+      hw_states_position_[i] =
+        dir_scale * encoder_feedback_->positionRad(ch) + cfg.position_offset_rad;
+    } else {
+      // Stale or never received: report NaN until live data arrives.
+      hw_states_position_[i] = std::numeric_limits<double>::quiet_NaN();
+      if (!encoder_feedback_->absEverReceived(ch)) {
+        RCLCPP_WARN_THROTTLE(logger_, clock_, 5000,
+                             "Joint '%s': no absolute encoder frame received yet (ID 0x%08X)",
+                             cfg.name.c_str(), cfg.encoder_abs_can_id);
+      }
+    }
+
+    if (encoder_feedback_->speedFresh(ch, fresh_window)) {
+      hw_states_velocity_[i] = dir_scale * encoder_feedback_->velocityRads(ch);
+    } else {
+      hw_states_velocity_[i] = std::numeric_limits<double>::quiet_NaN();
     }
   }
   return hardware_interface::return_type::OK;
@@ -360,69 +420,6 @@ std::vector<hardware_interface::CommandInterface> ArmCanInterface::export_comman
     ifs.emplace_back(joints_[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_velocity_[i]);
   }
   return ifs;
-}
-
-void ArmCanInterface::onCanFrame(uint32_t id, const std::vector<uint8_t> & data)
-{
-  // Route by full 29-bit arbitration ID (stripped of EFF flag by CANController).
-  // Firmware TX layout per docs/integration/questions.md §A:
-  //   Abs  frame IDs: 0x0108C701/C801/C901/CB01  (BASE/SHOULDER/ELBOW/WRIST)
-  //   Speed frame IDs: each abs ID + 0x40
-
-  auto abs_it = abs_can_id_to_joint_.find(id);
-  if (abs_it != abs_can_id_to_joint_.end()) {
-    // Absolute position frame (DLC = 6):
-    //   bytes 0–1 : uint16 LE calibrated angle (TLE5012B 15-bit signed counts)
-    //   bytes 2–3 : uint16 LE TLE5012B status register
-    //   byte  4   : reserved (0x00)
-    //   byte  5   : validity flag (0x01 = valid, 0x00 = sensor error)
-    if (data.size() < 6) {
-      return;
-    }
-    if (data[5] != 0x01) {
-      // Validity flag not set — sensor error. Keep last known position; log once.
-      RCLCPP_WARN(logger_,
-                  "Encoder abs frame 0x%08X: validity flag 0x%02X (sensor error)",
-                  id, data[5]);
-      return;
-    }
-    // Reconstruct signed 15-bit count from LE uint16.
-    const uint16_t raw_u16 = static_cast<uint16_t>(data[0]) |
-                             (static_cast<uint16_t>(data[1]) << 8);
-    // TLE5012B angle is a 15-bit signed value in a 16-bit field (bit 15 unused/sign).
-    const int16_t counts = static_cast<int16_t>(raw_u16);
-    // Scale: 360° / 32768 counts, but we want radians: 2π / 32768 = π / 16384
-    constexpr double kCountsToRad = M_PI / 16384.0;
-    const double position_rad = static_cast<double>(counts) * kCountsToRad;
-    const double dir = static_cast<double>(joints_[abs_it->second].direction);
-    RCLCPP_DEBUG(logger_, "Encoder abs 0x%08X: counts=%d  pos_rad=%.4f", id, counts, position_rad);
-
-    std::lock_guard<std::mutex> lk(feedback_mutex_);
-    joints_[abs_it->second].position = position_rad * dir;
-    return;
-  }
-
-  auto spd_it = speed_can_id_to_joint_.find(id);
-  if (spd_it != speed_can_id_to_joint_.end()) {
-    // Angular velocity frame (DLC = 6):
-    //   bytes 0–3 : float32 angular velocity rad/s, PDP (middle) endian
-    //               Firmware stores via memcpy then swaps within 16-bit halves:
-    //               wire order [b1, b0, b3, b2] — undo swap before cast.
-    //   byte  4   : sign flag (0 = positive, 1 = negative) — informational only
-    //   bytes 5–7 : reserved
-    if (data.size() < 4) {
-      return;
-    }
-    // Undo PDP-endian swap: swap bytes 0↔1 and 2↔3, then reinterpret as float32 LE.
-    uint8_t buf[4] = { data[1], data[0], data[3], data[2] };
-    float velocity_rads = 0.0f;
-    std::memcpy(&velocity_rads, buf, sizeof(float));
-    const double dir = static_cast<double>(joints_[spd_it->second].direction);
-    RCLCPP_DEBUG(logger_, "Encoder spd 0x%08X: vel_rads=%.4f", id, velocity_rads);
-
-    std::lock_guard<std::mutex> lk(feedback_mutex_);
-    joints_[spd_it->second].velocity = static_cast<double>(velocity_rads) * dir;
-  }
 }
 
 }  // namespace arm_can_hardware

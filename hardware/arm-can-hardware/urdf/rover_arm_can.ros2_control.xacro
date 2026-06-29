@@ -1,12 +1,18 @@
 <?xml version="1.0"?>
 <!--
   ros2_control block for the rover arm using ArmCanInterface (CAN motors +
-  TLE5012B encoder feedback).  This is a parallel xacro to the serial-based
-  rover_arm.ros2_control.xacro used in production — include one or the other,
-  not both.
+  TLE5012B encoder feedback).  Motor / servo mapping matches can_node +
+  joy_mux_controller_py (/arm_xyz_cmd):
 
-  Encoder CAN IDs from docs/integration/questions.md section A.
-  joint4 / FOREARM_ENCODER (0x0A) omitted: no firmware exists yet.
+    joint1 → M1 base        (ARM_MOTOR_1  0x12) + BASE encoder
+    joint2 → M2 shoulder    (ARM_MOTOR_2  0x14) + SHOULDER encoder
+    joint3 → M3 elbow       (ARM_MOTOR_3  0x16) + ELBOW encoder
+    joint4 → M4 forearm     (ARM_MOTOR_4  0x18) — open loop until forearm encoder
+    joint5 → M5 wrist       (ARM_MOTOR_5  0x1A) + WRIST encoder
+    joint6 → spin servo
+    joint7 → clamp / gripper servo
+
+  Instruction bytes from prefixes.hpp (same as can_controller_node MOTOR_MAP).
 
   Usage:
     <xacro:include filename="$(find arm_can_hardware)/urdf/rover_arm_can.ros2_control.xacro"/>
@@ -19,6 +25,7 @@
         <plugin>arm_can_hardware/ArmCanInterface</plugin>
         <param name="can_interface">${can_interface}</param>
         <param name="send_heartbeat_on_activate">true</param>
+        <param name="feedback_freshness_ms">500.0</param>
       </hardware>
 
       <joint name="joint1">
@@ -26,6 +33,8 @@
         <param name="arm_instruction">0x12</param>
         <param name="velocity_scale">1.0</param>
         <param name="direction">1.0</param>
+        <param name="position_scale">1.0</param>
+        <param name="position_offset_rad">0.0</param>
         <param name="encoder_device_id">0x07</param>
         <param name="encoder_abs_can_id">0x0108C701</param>
         <param name="encoder_speed_can_id">0x0108C741</param>
@@ -36,9 +45,11 @@
 
       <joint name="joint2">
         <param name="kind">arm_motor</param>
-        <param name="arm_instruction">0x22</param>
+        <param name="arm_instruction">0x14</param>
         <param name="velocity_scale">1.0</param>
         <param name="direction">1.0</param>
+        <param name="position_scale">1.0</param>
+        <param name="position_offset_rad">0.0</param>
         <param name="encoder_device_id">0x08</param>
         <param name="encoder_abs_can_id">0x0108C801</param>
         <param name="encoder_speed_can_id">0x0108C841</param>
@@ -49,9 +60,11 @@
 
       <joint name="joint3">
         <param name="kind">arm_motor</param>
-        <param name="arm_instruction">0x32</param>
+        <param name="arm_instruction">0x16</param>
         <param name="velocity_scale">1.0</param>
         <param name="direction">-1.0</param>
+        <param name="position_scale">1.0</param>
+        <param name="position_offset_rad">0.0</param>
         <param name="encoder_device_id">0x09</param>
         <param name="encoder_abs_can_id">0x0108C901</param>
         <param name="encoder_speed_can_id">0x0108C941</param>
@@ -60,14 +73,47 @@
         <state_interface name="velocity"/>
       </joint>
 
-      <joint name="joint5">
+      <!-- M4 forearm: motor only until FOREARM_ENCODER (0x0A) firmware is installed. -->
+      <joint name="joint4">
         <param name="kind">arm_motor</param>
-        <param name="arm_instruction">0x42</param>
+        <param name="arm_instruction">0x18</param>
         <param name="velocity_scale">0.5</param>
         <param name="direction">1.0</param>
+        <param name="position_scale">1.0</param>
+        <param name="position_offset_rad">0.0</param>
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <joint name="joint5">
+        <param name="kind">arm_motor</param>
+        <param name="arm_instruction">0x1A</param>
+        <param name="velocity_scale">1.0</param>
+        <param name="direction">1.0</param>
+        <param name="position_scale">1.0</param>
+        <param name="position_offset_rad">0.0</param>
         <param name="encoder_device_id">0x0B</param>
         <param name="encoder_abs_can_id">0x0108CB01</param>
         <param name="encoder_speed_can_id">0x0108CB41</param>
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <!-- Matches can_node spin_max_deg_per_command default (7 deg per command tick). -->
+      <joint name="joint6">
+        <param name="kind">spin_servo</param>
+        <param name="servo_max">7.0</param>
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <!-- Matches can_node clamp_max_deg_per_command default (15 deg per command tick). -->
+      <joint name="joint7">
+        <param name="kind">clamp_servo</param>
+        <param name="servo_max">15.0</param>
         <command_interface name="velocity"/>
         <state_interface name="position"/>
         <state_interface name="velocity"/>

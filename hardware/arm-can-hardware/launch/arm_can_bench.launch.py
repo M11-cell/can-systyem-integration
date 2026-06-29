@@ -4,7 +4,7 @@ Starts ros2_control with the CAN arm plugin, a joint_state_broadcaster, and a
 forward_command_controller so you can send velocity commands from the terminal:
 
     ros2 topic pub /arm_controller/commands std_msgs/msg/Float64MultiArray \\
-        "{data: [0.0, 0.0, 0.0, 0.0]}"
+        "{data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
 
 Usage::
 

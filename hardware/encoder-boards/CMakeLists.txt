@@ -27,7 +27,7 @@ add_library(encoder_boards SHARED
 
 target_include_directories(encoder_boards PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
+    $<INSTALL_INTERFACE:include/${PROJECT_NAME}>
 )
 
 ament_target_dependencies(encoder_boards PUBLIC ${DEPENDENCIES})
