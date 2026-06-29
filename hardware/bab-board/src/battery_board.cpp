@@ -127,7 +127,9 @@ void BAB::handleFrames(const uint32_t id, const std::vector<uint8_t>& data) {
         if (rail_idx < RAILS_COUNT) {
             auto& rail = rail_telemetry[rail_idx];
             rail.rail_id = static_cast<int>(rail_idx) + 1;
-            rail.active = switch_on;
+            // Treat a rail carrying voltage as ON: the firmware switch bit is
+            // not reliably set on the rover, so a powered rail should read ON.
+            rail.active = switch_on || voltage > BMS_MIN_VALID_VOLTAGE_V;
             rail.voltage = voltage;
             rail.current = current;
             rail.power = power;
