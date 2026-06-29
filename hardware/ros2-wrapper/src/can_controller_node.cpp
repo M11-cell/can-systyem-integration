@@ -43,10 +43,8 @@ CanControllerNode::CanControllerNode(const rclcpp::NodeOptions& options) :
             "' — see log for errno and recovery hints");
     }
 
-    rclcpp::on_shutdown([weak_can = std::weak_ptr<can_util::CANController>(can_controller_)] {
-        if (const auto can = weak_can.lock()) {
-            can->stop();
-        }
+    rclcpp::on_shutdown([this] {
+        prepareShutdown();
     });
 
 
@@ -124,6 +122,23 @@ CanControllerNode::CanControllerNode(const rclcpp::NodeOptions& options) :
         can_send_rate_hz_);
 }
 
+CanControllerNode::~CanControllerNode() {
+    prepareShutdown();
+}
+
+void CanControllerNode::prepareShutdown() {
+    bool expected = false;
+    if (!shutting_down_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
+    can_send_timer_.reset();
+
+    if (can_controller_) {
+        can_controller_->stop();
+    }
+}
+
 //------------------------------ Cache incoming topic data (no CAN I/O here) --------------------------------
 
 void CanControllerNode::getTwistMessages(const geometry_msgs::msg::Twist::ConstSharedPtr& twist_msg) {
@@ -146,6 +161,10 @@ void CanControllerNode::getJointStateMessages(const sensor_msgs::msg::JointState
 //------------------------------ Timer: send cached commands at fixed rate --------------------------------
 
 void CanControllerNode::sendCanFrames() {
+    if (shutting_down_.load(std::memory_order_acquire)) {
+        return;
+    }
+
     geometry_msgs::msg::Twist::ConstSharedPtr twist;
     sensor_msgs::msg::JointState::ConstSharedPtr joint_state;
     bool send_twist = false;

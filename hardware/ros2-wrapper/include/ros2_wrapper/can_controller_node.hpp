@@ -22,11 +22,13 @@ using namespace std::literals::chrono_literals;
 class CanControllerNode : public rclcpp::Node {
 public:
     explicit CanControllerNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
+    ~CanControllerNode() override;
 
     void getTwistMessages(const geometry_msgs::msg::Twist::ConstSharedPtr& twist_msg);
     void getJointStateMessages(const sensor_msgs::msg::JointState::ConstSharedPtr& joint_state_msg);
 
 private:
+    void prepareShutdown();
     void sendCanFrames();
 
     std::string can_interface_;
@@ -60,6 +62,7 @@ private:
     // future safety wiring can re-enable it without touching control flow.
     std::atomic_bool inhibit_arm_cmds_{true};
     std::atomic_bool inhibit_wheel_cmds_{true};
+    std::atomic_bool shutting_down_{false};
 
     rclcpp::TimerBase::SharedPtr can_send_timer_;
     int can_send_rate_hz_{100};

@@ -35,16 +35,7 @@ namespace can_util {
     }
 
     void CANController::shutdown() {
-        stop_.store(true, std::memory_order_release);
-        const int fd = socket_descriptor;
-        if (fd >= 0) {
-            ::shutdown(fd, SHUT_RDWR);
-            ::close(fd);
-        }
-        if (readThread.joinable()) {
-            readThread.join();
-        }
-        socket_descriptor = -1;
+        stop();
     }
 
     bool CANController::initialize() {
@@ -142,10 +133,22 @@ namespace can_util {
     }
 
     bool CANController::readFrameIfAvailable(can_frame& frame) const {
-        // Set up the file descriptor set
+        if (stop_.load(std::memory_order_acquire)) {
+            return false;
+        }
+
+        int fd = -1;
+        {
+            std::lock_guard lock(mtx);
+            fd = socket_descriptor;
+        }
+        if (fd < 0) {
+            return false;
+        }
+
         fd_set read_fds;
         FD_ZERO(&read_fds);
-        FD_SET(socket_descriptor, &read_fds);
+        FD_SET(fd, &read_fds);
 
         // Set up the timeout with zero seconds for non-blocking
         // TODO 2026-02-17 (Will Free): Should we set a timeout here?
@@ -156,8 +159,8 @@ namespace can_util {
 
         // Use select to check if data is available
         if (
-            const int result = select(socket_descriptor + 1, &read_fds, nullptr, nullptr, &timeout);
-            result > 0 && FD_ISSET(socket_descriptor, &read_fds)
+            const int result = select(fd + 1, &read_fds, nullptr, nullptr, &timeout);
+            result > 0 && FD_ISSET(fd, &read_fds)
         ) {
             readFrame(frame);
             return true;
@@ -171,12 +174,24 @@ namespace can_util {
 
     // ReSharper disable once CppDFAUnreachableFunctionCall
     bool CANController::readFrame(can_frame& frame) const {
+        int fd = -1;
+        {
+            std::lock_guard lock(mtx);
+            fd = socket_descriptor;
+        }
+        if (fd < 0) {
+            return false;
+        }
+
         // clear the previous frame contents
         memset(&frame, 0, sizeof(frame));
 
-        const auto byte_count = read(socket_descriptor, &frame, sizeof(struct can_frame));
+        const auto byte_count = read(fd, &frame, sizeof(struct can_frame));
 
         if (byte_count == -1) {
+            if (errno == EBADF || stop_.load(std::memory_order_acquire)) {
+                return false;
+            }
             logger.fatal("read error: {} ({})", strerror(errno), errno);
             return false;
         }
@@ -201,6 +216,9 @@ namespace can_util {
                 continue;
             }
 
+            if (errno == EBADF || stop_.load(std::memory_order_acquire)) {
+                return false;
+            }
             logger.warn("Failed to send CAN frame: {} ({})", strerror(errno), errno);
             return false;
         }
@@ -213,9 +231,16 @@ namespace can_util {
     bool CANController::sendFrame(const can_frame& frame) const {
         std::lock_guard lock(mtx);
 
+        if (socket_descriptor < 0) {
+            return false;
+        }
+
         const auto byte_count = write(socket_descriptor, &frame, sizeof(can_frame));
         const auto original_errno = errno;
         if (byte_count == -1) {
+            if (original_errno == EBADF || stop_.load(std::memory_order_acquire)) {
+                return false;
+            }
             logger.fatal("write error: {} ({})", strerror(original_errno), original_errno);
             return false;
         }
