@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<!--
+  Fake ros2_control block for MoveIt planning demos (no CAN / serial hardware).
+  Uses mock_components/GenericSystem so joint_trajectory_controller can execute plans in RViz.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name="rover_arm_fake_ros2_control" params="name initial_positions_file">
+        <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
+
+        <ros2_control name="${name}" type="system">
+            <hardware>
+                <plugin>mock_components/GenericSystem</plugin>
+            </hardware>
+
+            <xacro:macro name="fake_arm_joint" params="joint_name">
+                <joint name="${joint_name}">
+                    <command_interface name="position"/>
+                    <state_interface name="position">
+                        <param name="initial_value">${initial_positions[joint_name]}</param>
+                    </state_interface>
+                    <state_interface name="velocity"/>
+                </joint>
+            </xacro:macro>
+
+            <xacro:fake_arm_joint joint_name="joint1"/>
+            <xacro:fake_arm_joint joint_name="joint2"/>
+            <xacro:fake_arm_joint joint_name="joint3"/>
+            <xacro:fake_arm_joint joint_name="joint4"/>
+            <xacro:fake_arm_joint joint_name="joint5"/>
+            <xacro:fake_arm_joint joint_name="joint6"/>
+        </ros2_control>
+    </xacro:macro>
+</robot>

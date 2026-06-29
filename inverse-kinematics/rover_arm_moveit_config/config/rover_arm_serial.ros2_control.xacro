@@ -1,4 +1,12 @@
 <?xml version="1.0"?>
+<!--
+  LEGACY serial ros2_control block for the rover arm (arm_interface/ArmInterface):
+  ABSENC encoders on /dev/ttyUSB0 and motor commands on /dev/ttyTHS1.
+
+  Kept for reference only. The arm has moved to CAN; production uses
+  arm_can_hardware/ArmCanInterface via rover_arm_can.ros2_control.xacro.
+  Select this path with hardware_backend:=serial in rover_arm.urdf.xacro.
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
     <xacro:macro name="rover_arm_ros2_control" params="name initial_positions_file">
         <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>

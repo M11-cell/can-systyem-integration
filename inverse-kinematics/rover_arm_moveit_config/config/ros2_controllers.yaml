@@ -16,7 +16,10 @@ arm_controller:
       - joint1
       - joint2
       - joint3
+      - joint4
       - joint5
+      - joint6
+      - joint7
     interface_name: velocity
     # command_interfaces:
     #   - velocity
