@@ -36,13 +36,25 @@ class VKBButtonLayout(IntEnum):
     EN1_DOWN     = 23
     EN2_UP       = 24
     EN2_DOWN     = 25
-    F1           = 26  # reserved — can_safety_node wheel_force_stop_button
-    F2           = 27  # reserved — can_safety_node wheel_resume_button
-    F3           = 28
+    # F1/F2/F3 double as arm sub-mode selectors in ik_mux_vkb (FK / Servo /
+    # Poses). can_safety_node defaults F1/F2 to wheel force-stop/resume, so
+    # arm_ik_teleop.launch.py remaps the safety buttons when both run together.
+    F1           = 26  # ik_mux_vkb: arm FK; else can_safety_node wheel_force_stop_button
+    F2           = 27  # ik_mux_vkb: arm Servo; else can_safety_node wheel_resume_button
+    F3           = 28  # ik_mux_vkb: arm Poses
 
 
 class VKBAxesLayout(IntEnum):
-    """Axis index mapping for the VKB NXT joystick as reported by joy_node."""
+    """Axis index mapping for the VKB NXT joystick as reported by joy_node.
+
+    In ``ik_mux_vkb`` F2 Cartesian mode the arm's operator-facing base axes are
+    cyclically rotated: STICK_Y push commands base Z (physical forward/back),
+    STICK_Z lean commands base X (physical left/right), and STICK_X twist
+    commands base Y (physical up/down). A3 up/down and left/right command pitch
+    and yaw about the end-effector; C1 left/right commands end-effector roll.
+    Axis indices and direction signs are ROS parameters on ``ik_mux_vkb`` so
+    controller firmware variants can be corrected without rebuilding.
+    """
 
     STICK_X        = 0
     STICK_Y        = 1

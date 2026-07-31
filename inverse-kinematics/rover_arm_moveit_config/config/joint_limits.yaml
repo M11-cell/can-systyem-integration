@@ -25,6 +25,10 @@ joint_limits:
     has_acceleration_limits: true
     max_acceleration: 1.0
   joint4:
+    # Forearm is a multi-turn continuous joint (De Bruijn/quadrature, questions.md
+    # §C) with no encoder feedback yet. It is a URDF `continuous` joint, so MoveIt
+    # rejects position limits here ("Cannot specify position limits for continuous
+    # joint"); enforce any soft range downstream once mechanical limits are known.
     has_velocity_limits: true
     max_velocity: 0.5
     has_acceleration_limits: true

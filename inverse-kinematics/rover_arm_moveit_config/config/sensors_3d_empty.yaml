@@ -1,0 +1,2 @@
+# No depth cameras on the rover arm teleop stack — disable MoveIt octomap sensors.
+sensors: []

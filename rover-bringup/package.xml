@@ -9,6 +9,19 @@
 
     <buildtool_depend>ament_cmake</buildtool_depend>
 
+    <!-- arm_ik_teleop.launch.py runtime stack -->
+    <exec_depend>joy</exec_depend>
+    <exec_depend>rviz2</exec_depend>
+    <exec_depend>controller_manager</exec_depend>
+    <exec_depend>robot_state_publisher</exec_depend>
+    <exec_depend>moveit_ros_move_group</exec_depend>
+    <exec_depend>moveit_servo</exec_depend>
+    <exec_depend>ik_mux_controller</exec_depend>
+    <exec_depend>rover_arm_moveit_config</exec_depend>
+    <exec_depend>arm_can_hardware</exec_depend>
+    <exec_depend>wheel_can_hardware</exec_depend>
+    <exec_depend>can_safety_node</exec_depend>
+
     <test_depend>ament_lint_auto</test_depend>
     <test_depend>ament_lint_common</test_depend>
 

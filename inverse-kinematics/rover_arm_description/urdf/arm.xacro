@@ -115,17 +115,23 @@
     </link>
 
 
+    <!-- Continuous joints carry an effort/velocity <limit> (no lower/upper) so
+         joint_trajectory_controller can read a limits object; MoveIt planning
+         limits still come from config/joint_limits.yaml. -->
     <joint name="joint1" type="continuous">
         <parent link="base_structure_link"/>
         <child link="base_pivot_link"/>
         <origin xyz="0 0 0.1618" rpy="0 0 0"/>
         <axis xyz="0 0 1"/>
+        <limit effort="100" velocity="1.0"/>
     </joint>
 
     <joint name="joint2" type="continuous">
         <parent link="base_pivot_link"/>
         <child link="bicep_tube_link"/>
         <origin xyz="0.11645 0 0" rpy="0 0 0"/>
+        <axis xyz="1 0 0"/>
+        <limit effort="100" velocity="1.0"/>
     </joint>
 
     <joint name="joint3" type="continuous">
@@ -133,6 +139,7 @@
         <child link="bicep_gearbox_link"/>
         <origin xyz="-0.092875 0 0.440" rpy="0 0 0"/>
         <axis xyz="1 0 0"/>
+        <limit effort="100" velocity="1.0"/>
     </joint>
     
    <joint name="joint4" type="continuous">
@@ -140,6 +147,7 @@
         <child link="forearm_tube_link"/>
         <origin xyz="0 0 0.085" rpy="0 0 0"/>
         <axis xyz=" 0 0 1"/>
+        <limit effort="100" velocity="0.5"/>
     </joint>
     
     <joint name="joint5" type="continuous">
@@ -147,6 +155,7 @@
         <child link="bracket_connection_link"/>
         <origin xyz="0.0421 0 0.3" rpy="0 0 0"/>
         <axis xyz=" 1 0 0"/>
+        <limit effort="100" velocity="1.0"/>
     </joint>
 
     <joint name="joint6" type="continuous">
@@ -154,6 +163,7 @@
         <child link="gripper_base_link"/>
         <origin xyz="-0.026225 0 0.070075" rpy="0 0 0"/>
         <axis xyz=" 0 0 1"/>
+        <limit effort="100" velocity="1.57"/>
     </joint>
 
 

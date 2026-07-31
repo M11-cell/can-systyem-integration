@@ -7,10 +7,16 @@ use_gazebo: false # Whether the robot is started in a Gazebo simulation environm
 command_in_type: "unitless" # "unitless"> in the range [-1:1], as if from joystick. "speed_units"> cmds are in m/s and rad/s
 scale:
   # Scale parameters are only used if command_in_type=="unitless"
-  linear:  0.4  # Max linear velocity. Unit is [m/s]. Only used for Cartesian commands.
-  rotational:  0.8 # Max angular velocity. Unit is [rad/s]. Only used for Cartesian commands.
+  linear:  0.25  # Manipulation-first max linear velocity [m/s].
+  rotational:  0.5 # Manipulation-first max angular velocity [rad/s].
   # Max joint angular/linear velocity. Only used for joint commands on joint_command_in_topic.
   joint: 0.5
+
+# Hybrid teleop (ik_mux_vkb): linear is stamped in the planning/base frame;
+# angular is authored about the EE and rotated into base before publish.
+# When true, any twist still stamped in the EE frame rotates about tip axes
+# (rotation-only transform). Keep enabled.
+apply_twist_commands_about_ee_frame: true
 
 # Optionally override Servo's internal velocity scaling when near singularity or collision (0.0 = use internal velocity scaling)
 # override_velocity_scaling_factor = 0.0 # valid range [0.0:1.0]
@@ -36,15 +42,23 @@ publish_robot_description_semantic: true
 # which other nodes can use as a source for information about the planning environment.
 # NOTE: If a different node in your system is responsible for the "primary" planning scene instance (e.g. the MoveGroup node),
 # then is_primary_planning_scene_monitor needs to be set to false.
-is_primary_planning_scene_monitor: true
+# move_group owns the primary planning scene when both run together
+# (arm_ik_teleop.launch.py). Servo consumes it as a secondary monitor.
+is_primary_planning_scene_monitor: false
 
 ## MoveIt properties
 move_group_name:  arm  # Often 'manipulator' or 'arm'
-planning_frame: base_structure_link  # The MoveIt planning frame. Often 'base_link' or 'world'
 
-## Other frames
-ee_frame_name: gripper_claw_link  # The name of the end effector link, used to return the EE pose
-robot_link_command_frame:  base_structure_link  # commands must be given in the frame of a robot link. Usually either the base or end effector
+## Frames (Jazzy note)
+# MoveIt Servo on Jazzy does NOT take planning_frame / ee_frame_name /
+# robot_link_command_frame parameters. The planning frame is derived from the
+# move group, and incoming commands are interpreted in the twist header's
+# frame_id. ik_mux_vkb publishes hybrid twists stamped in base_structure_link
+# (linear in base; angular rates rotated from gripper_claw_link into base).
+# The pre-Jazzy keys below are kept commented for reference only.
+# planning_frame: base_structure_link
+# ee_frame_name: gripper_claw_link
+# robot_link_command_frame:  base_structure_link
 
 ## Stopping behaviour
 incoming_command_timeout:  0.1  # Stop servoing if X seconds elapse without a new command
@@ -53,8 +67,10 @@ incoming_command_timeout:  0.1  # Stop servoing if X seconds elapse without a ne
 num_outgoing_halt_msgs_to_publish: 4
 
 ## Configure handling of singularities and joint limits
-lower_singularity_threshold:  25.0  # Start decelerating when the condition number hits this (close to singularity)
-hard_stop_singularity_threshold: 50.0 # Stop when the condition number hits this
+# Start softening before wrist lock (joint5≈0), while retaining the existing
+# hard stop and faster escape scaling.
+lower_singularity_threshold:  30.0  # Start decelerating when the condition number hits this
+hard_stop_singularity_threshold: 80.0 # Hard halt (was 50 — felt too aggressive in F2)
 joint_limit_margin: 0.05 # added as a buffer to joint limits [radians]. If moving quickly, make this larger.
 leaving_singularity_threshold_multiplier: 2.0 # Multiply the hard stop limit by this when leaving singularity (see https://github.com/ros-planning/moveit2/pull/620)
 
@@ -63,7 +79,7 @@ cartesian_command_in_topic: ~/delta_twist_cmds  # Topic for incoming Cartesian t
 joint_command_in_topic: ~/delta_joint_cmds # Topic for incoming joint angle commands
 joint_topic: /joint_states
 status_topic: ~/status # Publish status to this topic
-command_out_topic: /arm_controller/commands # Publish outgoing commands here
+command_out_topic: /arm_servo_controller/commands # Publish outgoing commands here
 
 ## Collision checking for the entire robot body
 check_collisions: true # Check collisions?

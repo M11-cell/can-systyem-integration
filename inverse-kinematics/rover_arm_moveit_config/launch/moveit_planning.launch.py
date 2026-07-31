@@ -105,6 +105,11 @@ def generate_launch_description():
                 'publish_state_updates': True,
                 'publish_transforms_updates': True,
                 'monitor_dynamics': False,
+                # CheckStartStateBounds reads <pipeline>.fix_start_state (e.g. ompl.*).
+                'ompl.fix_start_state': True,
+                'chomp.fix_start_state': True,
+                'stomp.fix_start_state': True,
+                'pilz_industrial_motion_planner.fix_start_state': True,
             },
         ],
         additional_env={'DISPLAY': os.environ.get('DISPLAY', '')},

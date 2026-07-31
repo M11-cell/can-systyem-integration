@@ -6,11 +6,19 @@
     <xacro:include filename="common_properties.xacro"/>
     <!-- <xacro:include filename="rover_arm.ros2_control.xacro"/> -->
 
-    <joint name="joint7" type="fixed">
+    <!-- joint7 is the clamp/gripper servo. It is NOT part of the MoveIt "arm"
+         planning group (see rover_arm.srdf) and is commanded directly by
+         gripper_controller, outside of IK. It is a movable (continuous) joint
+         rather than fixed so mock_components/GenericSystem accepts it in sim;
+         GenericSystem rejects fixed joints, while the real ArmCanInterface does
+         not care. The <limit> is required for continuous joints under
+         joint_trajectory_controller and is otherwise cosmetic here. -->
+    <joint name="joint7" type="continuous">
         <parent link="gripper_base_link"/>
         <child link="gripper_claw_link"/>
         <origin xyz="0.005725 0 0.07" rpy="0 0 0"/>
         <axis xyz="0 0 1"/>
+        <limit effort="50" velocity="2.0"/>
     </joint>
 
 </robot>

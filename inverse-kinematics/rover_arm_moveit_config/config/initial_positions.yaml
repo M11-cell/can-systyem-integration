@@ -1,10 +1,12 @@
 # Default initial positions for rover_arm ros2_control
 
+# Match SRDF "home" so sim boots in a Servo-friendly (non-singular) pose.
+# joint5 kept ~0.7 rad so wrist (joint4/joint6) stays well away from gimbal lock.
 initial_positions:
   joint1: 0
-  joint2: 0
-  joint3: 0
+  joint2: 0.5
+  joint3: 0.7
   joint4: 0
-  joint5: 0
+  joint5: 0.7
   joint6: 0
   joint7: 0
