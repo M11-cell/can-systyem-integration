@@ -1,4 +1,12 @@
 # joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
+#
+# Mechanical position limits (radians; see arm.xacro):
+#   joint1 base     ±70°
+#   joint2 shoulder -70°  .. +138°
+#   joint3 elbow    +10°  .. +130°  (cannot reach 0)
+#   joint4 forearm  ±180°
+#   joint5 wrist    ±126°
+#   joint6 gripper  ±180° (360° travel)
 
 # For beginners, we downscale velocity and acceleration limits.
 # You can always specify higher scaling factors (<= 1.0) in your motion requests.
@@ -6,39 +14,52 @@ default_velocity_scaling_factor: 0.1
 default_acceleration_scaling_factor: 0.1
 
 # MoveIt time-parameterization requires has_velocity_limits: true and non-zero
-# max_velocity for every joint in the planning group. The arm URDF uses
-# continuous joints without <limit> tags, so limits must be defined here.
+# max_velocity for every joint in the planning group.
 joint_limits:
   joint1:
+    has_position_limits: true
+    min_position: -1.2217304764
+    max_position: 1.2217304764
     has_velocity_limits: true
     max_velocity: 1.0
     has_acceleration_limits: true
     max_acceleration: 1.0
   joint2:
+    has_position_limits: true
+    min_position: -1.2217304764
+    max_position: 2.4085543678
     has_velocity_limits: true
     max_velocity: 1.0
     has_acceleration_limits: true
     max_acceleration: 1.0
   joint3:
+    has_position_limits: true
+    min_position: 0.174533
+    max_position: 2.2689280276
     has_velocity_limits: true
     max_velocity: 1.0
     has_acceleration_limits: true
     max_acceleration: 1.0
   joint4:
-    # Forearm is a multi-turn continuous joint (De Bruijn/quadrature, questions.md
-    # §C) with no encoder feedback yet. It is a URDF `continuous` joint, so MoveIt
-    # rejects position limits here ("Cannot specify position limits for continuous
-    # joint"); enforce any soft range downstream once mechanical limits are known.
+    has_position_limits: true
+    min_position: -3.1415926536
+    max_position: 3.1415926536
     has_velocity_limits: true
     max_velocity: 0.5
     has_acceleration_limits: true
     max_acceleration: 0.5
   joint5:
+    has_position_limits: true
+    min_position: -2.1991148575
+    max_position: 2.1991148575
     has_velocity_limits: true
     max_velocity: 1.0
     has_acceleration_limits: true
     max_acceleration: 1.0
   joint6:
+    has_position_limits: true
+    min_position: -3.1415926536
+    max_position: 3.1415926536
     has_velocity_limits: true
     max_velocity: 1.57
     has_acceleration_limits: true

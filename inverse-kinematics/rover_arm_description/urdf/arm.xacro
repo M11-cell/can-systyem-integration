@@ -115,55 +115,60 @@
     </link>
 
 
-    <!-- Continuous joints carry an effort/velocity <limit> (no lower/upper) so
-         joint_trajectory_controller can read a limits object; MoveIt planning
-         limits still come from config/joint_limits.yaml. -->
-    <joint name="joint1" type="continuous">
+    <!-- Mechanical position limits (revolute). Degrees documented in comments;
+         MoveIt also mirrors these in config/joint_limits.yaml.
+           joint1 base     ±70°
+           joint2 shoulder -70°  .. +138°
+           joint3 elbow    +10°  .. +130°  (cannot reach 0)
+           joint4 forearm  ±180°
+           joint5 wrist    ±126°
+           joint6 gripper  ±180° (360° travel) -->
+    <joint name="joint1" type="revolute">
         <parent link="base_structure_link"/>
         <child link="base_pivot_link"/>
         <origin xyz="0 0 0.1618" rpy="0 0 0"/>
         <axis xyz="0 0 1"/>
-        <limit effort="100" velocity="1.0"/>
+        <limit lower="-1.2217304764" upper="1.2217304764" effort="100" velocity="1.0"/>
     </joint>
 
-    <joint name="joint2" type="continuous">
+    <joint name="joint2" type="revolute">
         <parent link="base_pivot_link"/>
         <child link="bicep_tube_link"/>
         <origin xyz="0.11645 0 0" rpy="0 0 0"/>
         <axis xyz="1 0 0"/>
-        <limit effort="100" velocity="1.0"/>
+        <limit lower="-1.2217304764" upper="2.4085543678" effort="100" velocity="1.0"/>
     </joint>
 
-    <joint name="joint3" type="continuous">
+    <joint name="joint3" type="revolute">
         <parent link="bicep_tube_link"/>
         <child link="bicep_gearbox_link"/>
         <origin xyz="-0.092875 0 0.440" rpy="0 0 0"/>
         <axis xyz="1 0 0"/>
-        <limit effort="100" velocity="1.0"/>
+        <limit lower="0.174533" upper="2.2689280276" effort="100" velocity="1.0"/>
     </joint>
-    
-   <joint name="joint4" type="continuous">
+
+    <joint name="joint4" type="revolute">
         <parent link="bicep_gearbox_link"/>
         <child link="forearm_tube_link"/>
         <origin xyz="0 0 0.085" rpy="0 0 0"/>
         <axis xyz=" 0 0 1"/>
-        <limit effort="100" velocity="0.5"/>
+        <limit lower="-3.1415926536" upper="3.1415926536" effort="100" velocity="0.5"/>
     </joint>
-    
-    <joint name="joint5" type="continuous">
+
+    <joint name="joint5" type="revolute">
         <parent link="forearm_tube_link"/>
         <child link="bracket_connection_link"/>
         <origin xyz="0.0421 0 0.3" rpy="0 0 0"/>
         <axis xyz=" 1 0 0"/>
-        <limit effort="100" velocity="1.0"/>
+        <limit lower="-2.1991148575" upper="2.1991148575" effort="100" velocity="1.0"/>
     </joint>
 
-    <joint name="joint6" type="continuous">
+    <joint name="joint6" type="revolute">
         <parent link="bracket_connection_link"/>
         <child link="gripper_base_link"/>
         <origin xyz="-0.026225 0 0.070075" rpy="0 0 0"/>
         <axis xyz=" 0 0 1"/>
-        <limit effort="100" velocity="1.57"/>
+        <limit lower="-3.1415926536" upper="3.1415926536" effort="100" velocity="1.57"/>
     </joint>
 
 
