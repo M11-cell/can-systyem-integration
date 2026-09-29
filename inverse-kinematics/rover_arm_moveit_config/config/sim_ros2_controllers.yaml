@@ -8,6 +8,8 @@
 controller_manager:
   ros__parameters:
     update_rate: 100  # Hz
+    # Jetson / non-RT: mlockall causes std::bad_alloc when controllers load.
+    lock_memory: false
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
