@@ -10,7 +10,8 @@ scale:
   linear:  0.25  # Manipulation-first max linear velocity [m/s].
   rotational:  0.5 # Manipulation-first max angular velocity [rad/s].
   # Max joint angular/linear velocity. Only used for joint commands on joint_command_in_topic.
-  joint: 0.5
+  # Was 0.5 — capped F1 jog at half of joint_limits max_velocity (1.0 rad/s).
+  joint: 1.0
 
 # Hybrid teleop (ik_mux_vkb): linear is stamped in the planning/base frame;
 # angular is authored about the EE and rotated into base before publish.

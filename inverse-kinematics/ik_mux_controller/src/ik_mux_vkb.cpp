@@ -79,14 +79,16 @@ constexpr int STICK_Z = 5;
 constexpr int COUNT = 6;  // highest index (STICK_Z) + 1
 }  // namespace vkb_axis
 
-// Per-motor velocity scales, identical to joy_mux_controller_py ArmVelocityScale.
+// Per-motor velocity scales for F1 joint jog (unitless [-1,1] into MoveIt Servo).
+// Servo multiplies by scale.joint (see servo_config.yaml); values beyond ±1 are
+// clamped, so magnitude here is mainly sign.
 namespace arm_scale
 {
 constexpr double M1_STICK_Z = 1.0;
-constexpr double M2_A3_VERTICAL = 0.4;
-constexpr double M3_STICK_Y = 0.7;
+constexpr double M2_A3_VERTICAL = 1.0;
+constexpr double M3_STICK_Y = 1.0;
 constexpr double M4_STICK_X = -0.7;
-constexpr double M5_A3_HORIZONTAL = 0.8;
+constexpr double M5_A3_HORIZONTAL = 1.0;
 constexpr double M6_SPIN = 1.0;
 constexpr double M7_GRIPPER = -1.0;
 }  // namespace arm_scale
